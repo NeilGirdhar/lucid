@@ -39,12 +39,27 @@ it, not a claim that it's close to done.
   and walks it with an exhaustive `match` over the sealed `Expr`
   hierarchy imported from `ast.lucid`, proving the AST is constructible
   and matchable under the interpreter, not just type-checkable.
+- `parser.lucid` — a recursive-descent parser turning `lexer.lucid`'s
+  token stream into `ast.lucid`'s AST, mirroring
+  `compiler/crates/lucid-syntax/src/parser.rs`'s structure: the same
+  precedence chain for expressions, one method per statement/pattern/type
+  form. Not at feature parity; deferred work (decorators, generics,
+  trait/implement/module blocks, comprehensions, error recovery, and
+  more) is listed at the top of the file itself. Runs under the reference
+  interpreter and successfully parses its own imports' source
+  (`parser_demo.lucid` proves this — see below).
+- `parser_demo.lucid` — parses a small sample program, then reads and
+  parses `lexer.lucid`'s own source. The second part is the self-hosting
+  proof point for this piece: Lucid source a human wrote, run by the
+  reference interpreter, correctly parsing real Lucid source into a
+  well-formed AST.
 
 Run them:
 
 ```
 lucid run self-host/lexer_demo.lucid
 lucid run self-host/ast_demo.lucid
+lucid run self-host/parser_demo.lucid
 ```
 
 Self-tokenizing takes on the order of 20-30 seconds under the debug
@@ -53,9 +68,10 @@ at a time (`text = text + c`), which is quadratic in a debug build with no
 inlining. Worth revisiting once there's more here to justify it (either a
 StringBuilder-style pattern in the language, or building lists of
 characters and joining once), but it works, which is what "start on"
-called for.
+called for. Self-parsing (tokenize + parse) `lexer.lucid`'s ~500 lines
+takes on the order of 30 seconds for the same reason, one layer up.
 
-Neither compiles under `lucid run --native` yet — see "Native codegen
+None compile under `lucid run --native` yet — see "Native codegen
 gaps" below. Both run correctly under the reference interpreter, which is
 the primary target for this work; native is a stretch goal.
 
@@ -167,10 +183,13 @@ work rather than a rushed fix bundled in here:
   subtyping against `Exception` or any other structural signal — so
   renaming `parser.lucid`'s error type away from the reserved
   `ParseError` to something that doesn't end in `Error` (a first attempt
-  used `ParseFailure`) silently broke every `?` in the file: with no
-  variant recognized as the error case, `?` fell back to treating
-  *every* union member as a success type instead, and callers saw a type
-  error naming the wrong union rather than anything mentioning `?`
+  used `ParseFailure`) silently broke every `?` whose union had more than
+  one non-`Error`-suffixed member: `?` only falls back to "first member
+  is the success type, the rest are errors" when *no* member ends in
+  `Error` at all, so a union like `ParsedModule | ParseFailure | LexError`
+  still found `LexError` by suffix and left `ParseFailure` in the success
+  side, alongside `ParsedModule` — and callers saw a type error naming
+  that two-member union rather than anything mentioning `?`
   itself. Naming it `ParserError` (distinct from the builtin
   `ParseError`, and ending in `Error`) fixed it.
 - **A `sealed class`'s fields and methods live in one body, subclasses
@@ -188,3 +207,29 @@ work rather than a rushed fix bundled in here:
   "constructing a class" while walking `ast.lucid`'s `Expr` hierarchy:
   they're already two different node types, not one shape you have to
   tell apart by convention.
+- **A variable's declared type sticks for the rest of the function, even
+  across sibling `if` blocks.** `parser.lucid` originally reused the name
+  `value` in two independent `if` branches of the same function — one
+  declaring `value: Expr | none = none`, a later sibling branch plainly
+  reassigning `value = self.parse_expr()?`. The second assignment isn't a
+  fresh binding: Lucid tracks one declared type per name for the whole
+  function, from wherever it's first declared, so the later branch's
+  value still typed as `Expr | none` even though only non-`none` values
+  ever reach it — rejecting a perfectly typed `Expr` against a plain
+  `Expr` parameter downstream. Fixed by giving the second branch its own
+  name (`assign_value`) instead of reusing `value`.
+- **Reassigning a `match` statement's own scrutinee inside an arm is a
+  read-only-variable error.** `match expr as result: case Ident: expr =
+  Construct(...)` fails with "cannot reassign to read-only or immutable
+  variable 'expr'" — the checker treats a plain-variable scrutinee as
+  immutable for the duration of the match, presumably so the narrowing
+  each arm relies on (`result`'s type per case) can't be invalidated
+  mid-match. Fixed by matching on a copy (`call_target = expr`) and
+  reassigning `expr` from that instead.
+- **A `match` needs a real wildcard to close out a sealed hierarchy —
+  naming the base class doesn't count.** `case Expr:` or `case TypeExpr:`
+  written as an intended catch-all still leaves the match
+  non-exhaustive: the checker requires either every subclass covered by
+  name or an actual `case _:`. Same shape as the `sealed class`/`extend`
+  mistake above — an assumption carried over from a different language's
+  pattern matching, not Lucid's.

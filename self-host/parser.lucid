@@ -1,0 +1,857 @@
+# A Lucid parser, written in Lucid: turns self-host/lexer.lucid's token
+# stream into self-host/ast.lucid's AST.
+#
+# Mirrors compiler/crates/lucid-syntax/src/parser.rs's structure --
+# recursive descent with precedence climbing for expressions, the same
+# precedence chain (logical or/and/not -> comparison -> bitwise or/xor/and
+# -> shift -> term -> factor -> power -> unary -> postfix -> primary) --
+# but is not at feature parity with it. Deliberately deferred for a later
+# pass (a parse error names the missing feature explicitly, rather than a
+# generic "unexpected token"):
+#   - decorators, metadata directives (`;`-blocks), docstring bodies
+#   - generics: type parameters, variance markers, bounds, projections
+#   - trait/implement/module/factory/getter/setter/classvar/dispatch
+#     definitions, context managers, async
+#   - comprehensions (list/set/dict), the ternary `if/else` expression,
+#     spread/gather (`*`/`**`/`***`) in calls and params
+#   - `construct(...)`, `trust[T](...)`, bare `type`/`class`/`trait` as an
+#     expression, byte-string / raw-string / f-string prefixes
+#   - tuple/record literals and type-shape parenthesized forms beyond
+#     plain grouping
+#   - error recovery (parse_module_recovering's synchronize-and-continue);
+#     this parser stops at the first ParserError, matching parser.rs's
+#     strict parse_module rather than its recovering counterpart
+
+from .ast import Span, dummy_span, merge_span, ParsedModule, Stmt, ClassDef, FunctionStmt, VarDef, Assignment, AugAssign, If, ElifBranch, For, While, Return, Raise, Assert, Break, Continue, Pass, Import, FromImport, ImportedName, ExprStmt, Try, ExceptHandler, MatchStmt, MatchArm, ClassMember, FieldMember, MethodMember, FunctionDef, FieldDef, Param, Pattern, IdentPattern, LiteralPattern, WildcardPattern, TypePattern, ClassDestructure, DestructureField, Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Propagate, Attribute, Index, Slice, ListExpr, SetExpr, DictExpr, DictEntry, AnonymousDef, Skip, Arg, LiteralValue, IntLit, FloatLit, StrLit, BoolLit, NoneLit, TypeExpr, NamedType, UnionType, FunctionType, ViewType, MutabilityView
+from .lexer import Token, LexError, tokenize
+
+class ParserError:
+    message: str
+    span: Span
+
+class Parser:
+    tokens: list[Token]
+    pos: int
+
+    def peek(self) -> Token:
+        if self.pos >= len(self.tokens):
+            return self.tokens[len(self.tokens) - 1]
+        return self.tokens[self.pos]
+
+    def peek_kind(self) -> str:
+        return self.peek().kind
+
+    def peek_at(self, offset: int) -> Token:
+        target = self.pos + offset
+        if target >= len(self.tokens):
+            return self.tokens[len(self.tokens) - 1]
+        return self.tokens[target]
+
+    def span(self) -> Span:
+        tok = self.peek()
+        return Span(0, 0, tok.line, tok.column)
+
+    def advance(self) -> Token:
+        tok = self.peek()
+        if self.pos < len(self.tokens) - 1:
+            self.pos = self.pos + 1
+        return tok
+
+    def check(self, kind: str) -> bool:
+        return self.peek_kind() == kind
+
+    def match_tok(self, kind: str) -> bool:
+        if self.check(kind):
+            self.advance()
+            return true
+        return false
+
+    def expect(self, kind: str) -> Token | ParserError:
+        if self.check(kind):
+            return self.advance()
+        return ParserError("expected " + kind + ", found " + self.peek_kind(), self.span())
+
+    def skip_newlines(self):
+        while self.match_tok("NEWLINE"):
+            pass
+
+    def consume_stmt_end(self) -> none | ParserError:
+        if self.match_tok("NEWLINE"):
+            return none
+        if self.check("EOF") or self.check("DEDENT"):
+            return none
+        if self.match_tok("SEMI"):
+            return none
+        return ParserError("expected end of statement, found " + self.peek_kind(), self.span())
+
+    def parse_module(self) -> ParsedModule | ParserError:
+        self.skip_newlines()
+        start = self.span()
+        statements: list[Stmt] = []
+        while not self.check("EOF"):
+            stmt = self.parse_statement()?
+            statements.append(stmt)
+            self.skip_newlines()
+        return ParsedModule(statements, start)
+
+    def parse_block(self) -> list[Stmt] | ParserError:
+        self.expect("COLON")?
+        if self.match_tok("NEWLINE"):
+            self.expect("INDENT")?
+            stmts: list[Stmt] = []
+            self.skip_newlines()
+            while not self.check("DEDENT") and not self.check("EOF"):
+                stmt = self.parse_statement()?
+                stmts.append(stmt)
+                self.skip_newlines()
+            self.expect("DEDENT")?
+            return stmts
+        stmt = self.parse_statement()?
+        return [stmt]
+
+    def parse_statement(self) -> Stmt | ParserError:
+        self.skip_newlines()
+        start = self.span()
+        kind = self.peek_kind()
+
+        if kind == "CLASS" or kind == "SEALED":
+            return self.parse_class_def()
+        if kind == "DEF":
+            return self.parse_function_def()
+        if kind == "IF":
+            return self.parse_if_stmt()
+        if kind == "FOR":
+            return self.parse_for_stmt()
+        if kind == "WHILE":
+            return self.parse_while_stmt()
+        if kind == "MATCH":
+            return self.parse_match_stmt()
+        if kind == "TRY":
+            return self.parse_try_stmt()
+        if kind == "RETURN":
+            self.advance()
+            value: Expr | none = none
+            if not self.check("NEWLINE") and not self.check("EOF") and not self.check("SEMI"):
+                value = self.parse_expr()?
+            self.consume_stmt_end()?
+            return Return(start, value)
+        if kind == "RAISE":
+            self.advance()
+            exception = self.parse_expr()?
+            self.consume_stmt_end()?
+            return Raise(start, exception)
+        if kind == "ASSERT":
+            self.advance()
+            self.expect("LPAREN")?
+            condition = self.parse_expr()?
+            message: Expr | none = none
+            if self.match_tok("COMMA"):
+                message = self.parse_expr()?
+            self.expect("RPAREN")?
+            self.consume_stmt_end()?
+            return Assert(start, condition, message)
+        if kind == "BREAK":
+            self.advance()
+            self.consume_stmt_end()?
+            return Break(start)
+        if kind == "CONTINUE":
+            self.advance()
+            self.consume_stmt_end()?
+            return Continue(start)
+        if kind == "PASS":
+            self.advance()
+            self.consume_stmt_end()?
+            return Pass(start)
+        if kind == "IMPORT":
+            return self.parse_import_stmt()
+        if kind == "FROM":
+            return self.parse_from_import_stmt()
+        return self.parse_expr_or_assign_stmt()
+
+    def parse_class_def(self) -> Stmt | ParserError:
+        start = self.span()
+        is_sealed = self.match_tok("SEALED")
+        self.expect("CLASS")?
+        name = self.expect_ident()?
+        bases: list[TypeExpr] = []
+        if self.match_tok("LPAREN"):
+            if not self.check("RPAREN"):
+                while true:
+                    bases.append(self.parse_type_expr()?)
+                    if not self.match_tok("COMMA"):
+                        break
+                    if self.check("RPAREN"):
+                        break
+            self.expect("RPAREN")?
+        self.expect("COLON")?
+        body: list[ClassMember] = []
+        if self.match_tok("NEWLINE"):
+            self.expect("INDENT")?
+            self.skip_newlines()
+            while not self.check("DEDENT") and not self.check("EOF"):
+                body.append(self.parse_class_member()?)
+                self.skip_newlines()
+            self.expect("DEDENT")?
+        else:
+            body.append(self.parse_class_member()?)
+        return ClassDef(start, name, [], bases, [], body, is_sealed, false)
+
+    def parse_class_member(self) -> ClassMember | ParserError:
+        start = self.span()
+        if self.match_tok("PASS"):
+            self.consume_stmt_end()?
+            return FieldMember(FieldDef("pass", NamedType(start, "object", []), none, false, none, start))
+        if self.match_tok("DEF"):
+            func = self.parse_raw_function(false)?
+            return MethodMember(func)
+        field_name = self.expect_ident()?
+        self.expect("COLON")?
+        type_annotation = self.parse_type_expr()?
+        default: Expr | none = none
+        if self.match_tok("EQ"):
+            default = self.parse_expr()?
+        self.consume_stmt_end()?
+        return FieldMember(FieldDef(field_name, type_annotation, default, false, none, start))
+
+    def parse_function_def(self) -> Stmt | ParserError:
+        self.expect("DEF")?
+        func = self.parse_raw_function(false)?
+        return FunctionStmt(func.span, func)
+
+    def parse_raw_function(self, is_dispatch: bool) -> FunctionDef | ParserError:
+        start = self.span()
+        name = self.expect_ident()?
+        params = self.parse_param_list()?
+        return_type: TypeExpr | none = none
+        if self.match_tok("ARROW"):
+            return_type = self.parse_type_expr()?
+        body: list[Stmt] = []
+        if self.check("COLON"):
+            body = self.parse_block()?
+        else:
+            self.consume_stmt_end()?
+        return FunctionDef(name, [], params, return_type, body, is_dispatch, false, false, false, [], start)
+
+    def parse_param_list(self) -> list[Param] | ParserError:
+        self.expect("LPAREN")?
+        params: list[Param] = []
+        if not self.check("RPAREN"):
+            while true:
+                start = self.span()
+                name = self.expect_ident()?
+                type_annotation: TypeExpr | none = none
+                if self.match_tok("COLON"):
+                    type_annotation = self.parse_type_expr()?
+                default: Expr | none = none
+                if self.match_tok("EQ"):
+                    default = self.parse_expr()?
+                params.append(Param(name, none, type_annotation, default, false, false, false, false, false, start))
+                if not self.match_tok("COMMA"):
+                    break
+                if self.check("RPAREN"):
+                    break
+        self.expect("RPAREN")?
+        return params
+
+    def parse_if_stmt(self) -> Stmt | ParserError:
+        start = self.span()
+        self.expect("IF")?
+        condition = self.parse_expr()?
+        then_branch = self.parse_block()?
+        elif_branches: list[ElifBranch] = []
+        while self.match_tok("ELIF"):
+            elif_cond = self.parse_expr()?
+            elif_body = self.parse_block()?
+            elif_branches.append(ElifBranch(elif_cond, elif_body))
+        else_branch: list[Stmt] | none = none
+        if self.match_tok("ELSE"):
+            else_branch = self.parse_block()?
+        return If(start, condition, then_branch, elif_branches, else_branch)
+
+    def parse_for_stmt(self) -> Stmt | ParserError:
+        start = self.span()
+        self.expect("FOR")?
+        target = self.parse_pattern()?
+        self.expect("IN")?
+        iterable = self.parse_expr()?
+        body = self.parse_block()?
+        return For(start, target, iterable, body, none)
+
+    def parse_while_stmt(self) -> Stmt | ParserError:
+        start = self.span()
+        self.expect("WHILE")?
+        condition = self.parse_expr()?
+        body = self.parse_block()?
+        return While(start, condition, body, none)
+
+    def parse_match_stmt(self) -> Stmt | ParserError:
+        start = self.span()
+        self.expect("MATCH")?
+        subject = self.parse_expr()?
+        subject_alias: str | none = none
+        if self.match_tok("AS"):
+            subject_alias = self.expect_ident()?
+        self.expect("COLON")?
+        self.expect("NEWLINE")?
+        self.expect("INDENT")?
+        arms: list[MatchArm] = []
+        self.skip_newlines()
+        while not self.check("DEDENT") and not self.check("EOF"):
+            arm_start = self.span()
+            self.expect("CASE")?
+            pattern = self.parse_pattern()?
+            guard: Expr | none = none
+            if self.match_tok("IF"):
+                guard = self.parse_expr()?
+            body = self.parse_block()?
+            arms.append(MatchArm(pattern, none, guard, body, arm_start))
+            self.skip_newlines()
+        self.expect("DEDENT")?
+        return MatchStmt(start, subject, subject_alias, arms)
+
+    def parse_try_stmt(self) -> Stmt | ParserError:
+        start = self.span()
+        self.expect("TRY")?
+        body = self.parse_block()?
+        handlers: list[ExceptHandler] = []
+        while self.match_tok("EXCEPT"):
+            h_start = self.span()
+            exception_type: TypeExpr = NamedType(h_start, "Any", [])
+            if not self.check("COLON"):
+                exception_type = self.parse_type_expr()?
+            name: str | none = none
+            if self.match_tok("AS"):
+                name = self.expect_ident()?
+            h_body = self.parse_block()?
+            handlers.append(ExceptHandler(exception_type, name, h_body, h_start))
+        finally_body: list[Stmt] | none = none
+        if self.match_tok("FINALLY"):
+            finally_body = self.parse_block()?
+        return Try(start, body, handlers, finally_body)
+
+    def parse_dotted_name(self) -> str | ParserError:
+        name = self.expect_ident()?
+        while self.check("DOT") and self.peek_at(1).kind == "IDENT":
+            self.advance()
+            part = self.expect_ident()?
+            name = name + "." + part
+        return name
+
+    def parse_import_stmt(self) -> Stmt | ParserError:
+        start = self.span()
+        self.expect("IMPORT")?
+        module_name = ""
+        while self.match_tok("DOT"):
+            module_name = module_name + "."
+        module_name = module_name + self.parse_dotted_name()?
+        alias: str | none = none
+        if self.match_tok("AS"):
+            alias = self.expect_ident()?
+        self.consume_stmt_end()?
+        return Import(start, module_name, alias)
+
+    def parse_from_import_stmt(self) -> Stmt | ParserError:
+        start = self.span()
+        self.expect("FROM")?
+        module_name = ""
+        while self.match_tok("DOT"):
+            module_name = module_name + "."
+        module_name = module_name + self.parse_dotted_name()?
+        self.expect("IMPORT")?
+        names: list[ImportedName] = []
+        while true:
+            name = self.expect_ident()?
+            alias: str | none = none
+            if self.match_tok("AS"):
+                alias = self.expect_ident()?
+            names.append(ImportedName(name, alias))
+            if not self.match_tok("COMMA"):
+                break
+        self.consume_stmt_end()?
+        return FromImport(start, module_name, names)
+
+    def parse_expr_or_assign_stmt(self) -> Stmt | ParserError:
+        start = self.span()
+        expr = self.parse_expr()?
+
+        if self.match_tok("COLON"):
+            type_annotation = self.parse_type_expr()?
+            value: Expr | none = none
+            if self.match_tok("EQ"):
+                value = self.parse_expr()?
+            self.consume_stmt_end()?
+            match expr as result:
+                case Ident:
+                    pattern: Pattern = IdentPattern(result.span, result.name)
+                    return VarDef(start, pattern, type_annotation, value, false, false)
+                case _:
+                    return ParserError("invalid variable definition target", expr.span)
+
+        if self.match_tok("EQ"):
+            assign_value = self.parse_expr()?
+            self.consume_stmt_end()?
+            return Assignment(start, expr, assign_value)
+
+        aug_op = ""
+        if self.match_tok("PLUS_EQ"):
+            aug_op = "ADD"
+        elif self.match_tok("MINUS_EQ"):
+            aug_op = "SUB"
+        elif self.match_tok("STAR_EQ"):
+            aug_op = "MUL"
+        elif self.match_tok("SLASH_EQ"):
+            aug_op = "DIV"
+        elif self.match_tok("DOUBLE_SLASH_EQ"):
+            aug_op = "FLOOR_DIV"
+        elif self.match_tok("PERCENT_EQ"):
+            aug_op = "MOD"
+        elif self.match_tok("DOUBLE_STAR_EQ"):
+            aug_op = "POW"
+
+        if aug_op != "":
+            aug_value = self.parse_expr()?
+            self.consume_stmt_end()?
+            return AugAssign(start, expr, aug_op, aug_value)
+
+        self.consume_stmt_end()?
+        return ExprStmt(expr.span, expr)
+
+    # --- Expressions, precedence climbing -----------------------------
+
+    def parse_expr(self) -> Expr | ParserError:
+        return self.parse_logical_or()
+
+    def parse_logical_or(self) -> Expr | ParserError:
+        left = self.parse_logical_and()?
+        while self.match_tok("OR"):
+            right = self.parse_logical_and()?
+            left = Binary(merge_span(left.span, right.span), "OR", left, right)
+        return left
+
+    def parse_logical_and(self) -> Expr | ParserError:
+        left = self.parse_logical_not()?
+        while self.match_tok("AND"):
+            right = self.parse_logical_not()?
+            left = Binary(merge_span(left.span, right.span), "AND", left, right)
+        return left
+
+    def parse_logical_not(self) -> Expr | ParserError:
+        start = self.span()
+        if self.match_tok("NOT"):
+            inner = self.parse_logical_not()?
+            return Unary(merge_span(start, inner.span), "NOT", inner)
+        return self.parse_comparison()
+
+    def parse_comparison(self) -> Expr | ParserError:
+        left = self.parse_bitwise_or()?
+        op = ""
+        if self.check("EQ_EQ"):
+            op = "EQ"
+        elif self.check("NOT_EQ"):
+            op = "NOT_EQ"
+        elif self.check("LT"):
+            op = "LT"
+        elif self.check("LT_EQ"):
+            op = "LT_EQ"
+        elif self.check("GT"):
+            op = "GT"
+        elif self.check("GT_EQ"):
+            op = "GT_EQ"
+        elif self.check("IN"):
+            op = "IN"
+        elif self.check("IS"):
+            if self.peek_at(1).kind == "NOT":
+                self.advance()
+                self.advance()
+                right = self.parse_bitwise_or()?
+                return Binary(merge_span(left.span, right.span), "IS_NOT", left, right)
+            op = "IS"
+        elif self.check("NOT") and self.peek_at(1).kind == "IN":
+            self.advance()
+            self.advance()
+            right = self.parse_bitwise_or()?
+            return Binary(merge_span(left.span, right.span), "NOT_IN", left, right)
+
+        if op != "":
+            self.advance()
+            right = self.parse_bitwise_or()?
+            left = Binary(merge_span(left.span, right.span), op, left, right)
+        return left
+
+    def parse_bitwise_or(self) -> Expr | ParserError:
+        left = self.parse_bitwise_xor()?
+        while self.match_tok("PIPE"):
+            right = self.parse_bitwise_xor()?
+            left = Binary(merge_span(left.span, right.span), "BIT_OR", left, right)
+        return left
+
+    def parse_bitwise_xor(self) -> Expr | ParserError:
+        left = self.parse_bitwise_and()?
+        while self.match_tok("CARET"):
+            right = self.parse_bitwise_and()?
+            left = Binary(merge_span(left.span, right.span), "BIT_XOR", left, right)
+        return left
+
+    def parse_bitwise_and(self) -> Expr | ParserError:
+        left = self.parse_shift()?
+        while self.match_tok("AMP"):
+            right = self.parse_shift()?
+            left = Binary(merge_span(left.span, right.span), "BIT_AND", left, right)
+        return left
+
+    def parse_shift(self) -> Expr | ParserError:
+        left = self.parse_term()?
+        while self.check("SHL") or self.check("SHR"):
+            op = "SHL"
+            if self.match_tok("SHL"):
+                pass
+            else:
+                self.advance()
+                op = "SHR"
+            right = self.parse_term()?
+            left = Binary(merge_span(left.span, right.span), op, left, right)
+        return left
+
+    def parse_term(self) -> Expr | ParserError:
+        left = self.parse_factor()?
+        while self.check("PLUS") or self.check("MINUS"):
+            op = "ADD"
+            if self.match_tok("PLUS"):
+                pass
+            else:
+                self.advance()
+                op = "SUB"
+            right = self.parse_factor()?
+            left = Binary(merge_span(left.span, right.span), op, left, right)
+        return left
+
+    def parse_factor(self) -> Expr | ParserError:
+        left = self.parse_power()?
+        while self.check("STAR") or self.check("SLASH") or self.check("DOUBLE_SLASH") or self.check("PERCENT"):
+            op = "MUL"
+            if self.match_tok("STAR"):
+                pass
+            elif self.match_tok("SLASH"):
+                op = "DIV"
+            elif self.match_tok("DOUBLE_SLASH"):
+                op = "FLOOR_DIV"
+            else:
+                self.advance()
+                op = "MOD"
+            right = self.parse_power()?
+            left = Binary(merge_span(left.span, right.span), op, left, right)
+        return left
+
+    def parse_power(self) -> Expr | ParserError:
+        left = self.parse_unary()?
+        if self.match_tok("DOUBLE_STAR"):
+            right = self.parse_power()?
+            return Binary(merge_span(left.span, right.span), "POW", left, right)
+        return left
+
+    def parse_unary(self) -> Expr | ParserError:
+        start = self.span()
+        if self.match_tok("MINUS"):
+            inner = self.parse_unary()?
+            return Unary(merge_span(start, inner.span), "NEG", inner)
+        if self.match_tok("PLUS"):
+            inner = self.parse_unary()?
+            return Unary(merge_span(start, inner.span), "POS", inner)
+        if self.match_tok("TILDE"):
+            inner = self.parse_unary()?
+            return Unary(merge_span(start, inner.span), "INVERT", inner)
+        return self.parse_postfix()
+
+    def parse_postfix(self) -> Expr | ParserError:
+        expr = self.parse_primary()?
+        while true:
+            if self.match_tok("LPAREN"):
+                args: list[Arg] = []
+                if not self.check("RPAREN"):
+                    while true:
+                        arg_start = self.span()
+                        name: str | none = none
+                        if self.peek_kind() == "IDENT" and self.peek_at(1).kind == "EQ":
+                            name = self.expect_ident()?
+                            self.advance()
+                        val = self.parse_expr()?
+                        args.append(Arg(name, val, false, false, false, arg_start))
+                        if not self.match_tok("COMMA"):
+                            break
+                        if self.check("RPAREN"):
+                            break
+                end = self.expect("RPAREN")?
+                span = merge_span(expr.span, Span(0, 0, end.line, end.column))
+                call_target = expr
+                match call_target as result:
+                    case Ident:
+                        if len(result.name) > 0 and result.name[0] >= "A" and result.name[0] <= "Z":
+                            expr = Construct(span, result.name, args)
+                        else:
+                            expr = Call(span, call_target, args)
+                    case _:
+                        expr = Call(span, call_target, args)
+                continue
+            if self.match_tok("LBRACKET"):
+                index = self.parse_slice_or_expr()?
+                end = self.expect("RBRACKET")?
+                span = merge_span(expr.span, Span(0, 0, end.line, end.column))
+                expr = Index(span, expr, index)
+                continue
+            if self.match_tok("DOT"):
+                attr = self.expect_ident()?
+                expr = Attribute(expr.span, expr, attr)
+                continue
+            if self.match_tok("QUESTION"):
+                expr = Propagate(expr.span, expr)
+                continue
+            break
+        return expr
+
+    def parse_slice_or_expr(self) -> Expr | ParserError:
+        start = self.span()
+        if self.match_tok("COLON"):
+            stop: Expr | none = none
+            if not self.check("COLON") and not self.check("RBRACKET"):
+                stop = self.parse_expr()?
+            step: Expr | none = none
+            if self.match_tok("COLON"):
+                if not self.check("RBRACKET"):
+                    step = self.parse_expr()?
+            return Slice(start, none, stop, step)
+        expr = self.parse_expr()?
+        if self.match_tok("COLON"):
+            stop: Expr | none = none
+            if not self.check("COLON") and not self.check("RBRACKET"):
+                stop = self.parse_expr()?
+            step: Expr | none = none
+            if self.match_tok("COLON"):
+                if not self.check("RBRACKET"):
+                    step = self.parse_expr()?
+            return Slice(expr.span, expr, stop, step)
+        return expr
+
+    def parse_primary(self) -> Expr | ParserError:
+        tok = self.peek()
+        kind = tok.kind
+        start = self.span()
+
+        if kind == "INT":
+            self.advance()
+            return LiteralExpr(start, IntLit(int(tok.text)))
+        if kind == "FLOAT":
+            self.advance()
+            return LiteralExpr(start, FloatLit(float(tok.text)))
+        if kind == "STR":
+            self.advance()
+            return LiteralExpr(start, StrLit(tok.text))
+        if kind == "TRUE":
+            self.advance()
+            return LiteralExpr(start, BoolLit(true))
+        if kind == "FALSE":
+            self.advance()
+            return LiteralExpr(start, BoolLit(false))
+        if kind == "NONE":
+            self.advance()
+            return LiteralExpr(start, NoneLit())
+        if kind == "SKIP":
+            self.advance()
+            return Skip(start)
+        if kind == "IDENT":
+            self.advance()
+            return Ident(start, tok.text)
+        if kind == "DEF":
+            return self.parse_anonymous_def()
+        if kind == "LPAREN":
+            self.advance()
+            inner = self.parse_expr()?
+            self.expect("RPAREN")?
+            return inner
+        if kind == "LBRACKET":
+            self.advance()
+            elements: list[Expr] = []
+            if not self.check("RBRACKET"):
+                while true:
+                    elements.append(self.parse_expr()?)
+                    if not self.match_tok("COMMA"):
+                        break
+                    if self.check("RBRACKET"):
+                        break
+            self.expect("RBRACKET")?
+            return ListExpr(start, elements)
+        if kind == "LBRACE":
+            return self.parse_brace_literal()
+        return ParserError("unexpected token in expression: " + kind, start)
+
+    def parse_anonymous_def(self) -> Expr | ParserError:
+        start = self.span()
+        self.expect("DEF")?
+        params: list[Param] = []
+        return_type: TypeExpr | none = none
+        if not self.check("COLON"):
+            params = self.parse_param_list()?
+            if self.match_tok("ARROW"):
+                return_type = self.parse_type_expr()?
+        self.expect("COLON")?
+        body: list[Stmt] = []
+        if self.match_tok("NEWLINE"):
+            self.expect("INDENT")?
+            self.skip_newlines()
+            while not self.check("DEDENT") and not self.check("EOF"):
+                body.append(self.parse_statement()?)
+                self.skip_newlines()
+            self.expect("DEDENT")?
+        else:
+            expr = self.parse_expr()?
+            body.append(Return(start, expr))
+        return AnonymousDef(start, params, return_type, body)
+
+    def parse_brace_literal(self) -> Expr | ParserError:
+        start = self.span()
+        self.expect("LBRACE")?
+        if self.match_tok("RBRACE"):
+            return SetExpr(start, [])
+        if self.check("COLON") and self.peek_at(1).kind == "RBRACE":
+            self.advance()
+            self.advance()
+            return DictExpr(start, [])
+        first_key = self.parse_expr()?
+        if self.match_tok("COLON"):
+            first_value = self.parse_expr()?
+            entries: list[DictEntry] = [DictEntry(first_key, first_value)]
+            while self.match_tok("COMMA"):
+                if self.check("RBRACE"):
+                    break
+                key = self.parse_expr()?
+                self.expect("COLON")?
+                value = self.parse_expr()?
+                entries.append(DictEntry(key, value))
+            self.expect("RBRACE")?
+            return DictExpr(start, entries)
+        elements: list[Expr] = [first_key]
+        while self.match_tok("COMMA"):
+            if self.check("RBRACE"):
+                break
+            elements.append(self.parse_expr()?)
+        self.expect("RBRACE")?
+        return SetExpr(start, elements)
+
+    def parse_pattern(self) -> Pattern | ParserError:
+        start = self.span()
+        kind = self.peek_kind()
+        if kind == "NONE":
+            self.advance()
+            return LiteralPattern(start, NoneLit())
+        if kind == "TRUE":
+            self.advance()
+            return LiteralPattern(start, BoolLit(true))
+        if kind == "FALSE":
+            self.advance()
+            return LiteralPattern(start, BoolLit(false))
+        if kind == "INT":
+            tok = self.peek()
+            self.advance()
+            return LiteralPattern(start, IntLit(int(tok.text)))
+        if kind == "STR":
+            tok = self.peek()
+            self.advance()
+            return LiteralPattern(start, StrLit(tok.text))
+        if self.peek_kind() == "IDENT" and self.peek().text == "_":
+            self.advance()
+            return WildcardPattern(start)
+        if self.peek_kind() == "IDENT":
+            name = self.peek().text
+            if len(name) > 0 and name[0] >= "A" and name[0] <= "Z":
+                type_expr = self.parse_type_expr()?
+                if self.check("LPAREN"):
+                    self.advance()
+                    fields: list[DestructureField] = []
+                    if not self.check("RPAREN"):
+                        while true:
+                            field_start = self.span()
+                            field_name: str | none = none
+                            if self.peek_kind() == "IDENT" and self.peek_at(1).kind == "EQ":
+                                field_name = self.expect_ident()?
+                                self.advance()
+                            inner_pattern = self.parse_pattern()?
+                            fields.append(DestructureField(field_name, inner_pattern))
+                            if not self.match_tok("COMMA"):
+                                break
+                            if self.check("RPAREN"):
+                                break
+                    self.expect("RPAREN")?
+                    class_name = ""
+                    match type_expr as t:
+                        case NamedType:
+                            class_name = t.name
+                        case _:
+                            pass
+                    return ClassDestructure(start, class_name, fields)
+                return TypePattern(start, type_expr)
+            self.advance()
+            return IdentPattern(start, name)
+        return ParserError("unsupported pattern starting with " + self.peek_kind(), start)
+
+    def expect_ident(self) -> str | ParserError:
+        if self.peek_kind() == "IDENT":
+            return self.advance().text
+        return ParserError("expected identifier, found " + self.peek_kind(), self.span())
+
+    # --- Types ----------------------------------------------------------
+
+    def parse_type_expr(self) -> TypeExpr | ParserError:
+        left = self.parse_type_primary()?
+        if self.check("PIPE"):
+            types: list[TypeExpr] = [left]
+            while self.match_tok("PIPE"):
+                types.append(self.parse_type_primary()?)
+            return UnionType(left.span, types)
+        return left
+
+    def parse_type_primary(self) -> TypeExpr | ParserError:
+        start = self.span()
+        if self.match_tok("TILDE"):
+            inner = self.parse_type_primary()?
+            return ViewType(start, MutabilityView("READ_ONLY"), inner)
+        if self.match_tok("BANG"):
+            inner = self.parse_type_primary()?
+            return ViewType(start, MutabilityView("IMMUTABLE"), inner)
+        if self.match_tok("NONE"):
+            return NamedType(start, "none", [])
+        if self.match_tok("LPAREN"):
+            params: list[TypeExpr] = []
+            if not self.check("RPAREN"):
+                while true:
+                    params.append(self.parse_type_expr()?)
+                    if not self.match_tok("COMMA"):
+                        break
+                    if self.check("RPAREN"):
+                        break
+            self.expect("RPAREN")?
+            self.expect("ARROW")?
+            return_type = self.parse_type_expr()?
+            return FunctionType(start, params, return_type)
+        if self.peek_kind() == "IDENT" or self.peek_kind() == "ANY":
+            name = self.peek().text
+            if self.peek_kind() == "ANY":
+                name = "any"
+            self.advance()
+            args: list[TypeExpr] = []
+            if self.match_tok("LBRACKET"):
+                while true:
+                    args.append(self.parse_type_expr()?)
+                    if not self.match_tok("COMMA"):
+                        break
+                    if self.check("RBRACKET"):
+                        break
+                self.expect("RBRACKET")?
+            return NamedType(start, name, args)
+        return ParserError("unexpected token in type expression: " + self.peek_kind(), start)
+
+def new_parser(tokens: list[Token]) -> Parser:
+    return Parser(tokens, 0)
+
+def parse(source: str) -> ParsedModule | ParserError | LexError:
+    tokens = tokenize(source)?
+    parser = new_parser(tokens)
+    return parser.parse_module()
