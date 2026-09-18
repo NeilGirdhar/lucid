@@ -58,9 +58,9 @@ def describe_stmt(s: Stmt) -> str:
         case ModuleStmt:
             return "module " + result.name
         case Import:
-            return "import " + result.module
+            return "import " + result.module_name
         case FromImport:
-            return "from " + result.module + " import"
+            return "from " + result.module_name + " import"
         case ExprStmt:
             return "exprstmt"
         case MetadataStmt:

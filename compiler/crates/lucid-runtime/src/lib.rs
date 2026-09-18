@@ -14,6 +14,32 @@ use std::rc::Rc;
 type BuiltinFn = Rc<dyn Fn(&[Value], &mut Interpreter) -> Result<Value, RuntimeError>>;
 type Teardown = (Vec<Stmt>, Option<Vec<Stmt>>, Rc<RefCell<Environment>>);
 
+/// Evaluates an expression that will be consumed as an ordinary value (a
+/// call/construct argument, a collection element, an operand) rather than
+/// returned directly. A `?` inside the expression produces a
+/// `Value::Return` sentinel meant to unwind out of the *enclosing
+/// function*, not become the value of this subexpression -- so every site
+/// that evaluates a subexpression and then goes on to do something else
+/// with the result (push it into a list, pass it to a callee, combine it
+/// with another operand) must check for that sentinel and re-propagate it,
+/// the same way statement execution already does for `Stmt::VarDef`'s and
+/// `Stmt::Assignment`'s own value expressions. Without this, a failing `?`
+/// nested inside, say, a call argument (`items.append(parse_one()?)`)
+/// silently hands the raw error object to `append` as if it were the
+/// success value instead of unwinding -- the caller's loop then keeps
+/// going with no indication anything failed, which for a loop whose exit
+/// condition depends on progress that same failed call was supposed to
+/// make is an infinite loop, not just a wrong answer.
+macro_rules! eval_operand {
+    ($self:expr, $expr:expr) => {{
+        let value = $self.eval_expr($expr)?;
+        if let Value::Return(_) = value {
+            return Ok(value);
+        }
+        value
+    }};
+}
+
 fn declaration_only_module(path: &std::path::Path) -> bool {
     let Ok(source) = std::fs::read_to_string(path) else {
         return false;
@@ -7385,7 +7411,7 @@ class ZeroDivisionError(Exception):
                 right,
                 span,
             } => {
-                let lval = self.eval_expr(left)?;
+                let lval = eval_operand!(self, left);
                 if matches!(op, BinaryOp::Is | BinaryOp::IsNot) {
                     let type_name = match &**right {
                         Expr::Type(TypeExpr::Named { name, .. }) | Expr::Ident { name, .. } => {
@@ -7420,7 +7446,7 @@ class ZeroDivisionError(Exception):
                                 | "Shape"
                         ) || self.classes.contains_key(&name);
                         if !is_type_operand {
-                            let rval = self.eval_expr(right)?;
+                            let rval = eval_operand!(self, right);
                             return Ok(Value::Bool(if matches!(op, BinaryOp::Is) {
                                 lval == rval
                             } else {
@@ -7539,11 +7565,11 @@ class ZeroDivisionError(Exception):
                         self.eval_expr(right)
                     };
                 }
-                let rval = self.eval_expr(right)?;
+                let rval = eval_operand!(self, right);
                 self.eval_binary_op(op, lval, rval, span)
             }
             Expr::Unary { op, expr, span } => {
-                let val = self.eval_expr(expr)?;
+                let val = eval_operand!(self, expr);
                 match op {
                     UnaryOp::Neg => match val {
                         Value::Int(n) => Ok(Value::Int(match n {
@@ -7669,7 +7695,7 @@ class ZeroDivisionError(Exception):
                                             span: arg.span,
                                         });
                                     }
-                                    updated.insert(name.clone(), self.eval_expr(&arg.value)?);
+                                    updated.insert(name.clone(), eval_operand!(self, &arg.value));
                                 }
                                 return Ok(Value::Object {
                                     class_name: class_name.clone(),
@@ -7725,7 +7751,7 @@ class ZeroDivisionError(Exception):
                             partial_args.push((arg.name.clone(), None));
                         } else {
                             partial_args
-                                .push((arg.name.clone(), Some(self.eval_expr(&arg.value)?)));
+                                .push((arg.name.clone(), Some(eval_operand!(self, &arg.value))));
                         }
                     }
                     return Ok(Value::Partial {
@@ -7737,7 +7763,7 @@ class ZeroDivisionError(Exception):
                 let mut evaluated_args: Vec<(Option<String>, Value)> = Vec::new();
                 for arg in args {
                     if arg.is_gather_spread {
-                        let val = self.eval_expr(&arg.value)?;
+                        let val = eval_operand!(self, &arg.value);
                         match val {
                             Value::Object {
                                 class_name, fields, ..
@@ -7788,7 +7814,7 @@ class ZeroDivisionError(Exception):
                             }
                         }
                     } else if arg.is_spread {
-                        let val = self.eval_expr(&arg.value)?;
+                        let val = eval_operand!(self, &arg.value);
                         if arg.is_dict_spread {
                             match val {
                                 Value::Dict(d) => {
@@ -7822,7 +7848,7 @@ class ZeroDivisionError(Exception):
                             }
                         }
                     } else {
-                        let value = self.eval_expr(&arg.value)?;
+                        let value = eval_operand!(self, &arg.value);
                         if !matches!(value, Value::Skip) {
                             evaluated_args.push((arg.name.clone(), value));
                         }
@@ -9547,7 +9573,7 @@ class ZeroDivisionError(Exception):
             Expr::List { elements, .. } => {
                 let mut vals = Vec::new();
                 for e in elements {
-                    let val = self.eval_expr(e)?;
+                    let val = eval_operand!(self, e);
                     if !matches!(val, Value::Skip) {
                         vals.push(val);
                     }
@@ -9557,11 +9583,11 @@ class ZeroDivisionError(Exception):
             Expr::Dict { entries, .. } => {
                 let mut map = HashMap::new();
                 for (k, v) in entries {
-                    let k_val = self.eval_expr(k)?;
+                    let k_val = eval_operand!(self, k);
                     if matches!(k_val, Value::Skip) {
                         continue;
                     }
-                    let v_val = self.eval_expr(v)?;
+                    let v_val = eval_operand!(self, v);
                     if matches!(v_val, Value::Skip) {
                         continue;
                     }
@@ -9576,7 +9602,7 @@ class ZeroDivisionError(Exception):
             Expr::Set { elements, .. } => {
                 let mut set_vals = Vec::new();
                 for e in elements {
-                    let val = self.eval_expr(e)?;
+                    let val = eval_operand!(self, e);
                     if !matches!(val, Value::Skip) && !set_vals.contains(&val) {
                         set_vals.push(val);
                     }
@@ -9605,7 +9631,7 @@ class ZeroDivisionError(Exception):
                         };
                         let mut evaluated = Vec::new();
                         for arg in args {
-                            let value = self.eval_expr(&arg.value)?;
+                            let value = eval_operand!(self, &arg.value);
                             evaluated.push((arg.name.clone(), value));
                         }
                         return self.invoke_value(callee, evaluated, *span);
@@ -9613,7 +9639,7 @@ class ZeroDivisionError(Exception):
                     let field_names = self.constructor_field_names(class_name);
                     let mut slots: Vec<Option<Value>> = Vec::new();
                     for arg in args {
-                        let value = self.eval_expr(&arg.value)?;
+                        let value = eval_operand!(self, &arg.value);
                         match &arg.name {
                             Some(name) => {
                                 let Some(index) =
@@ -9651,7 +9677,7 @@ class ZeroDivisionError(Exception):
                 }
                 let mut field_values = HashMap::new();
                 for (idx, arg) in args.iter().enumerate() {
-                    let val = self.eval_expr(&arg.value)?;
+                    let val = eval_operand!(self, &arg.value);
                     let name = arg.name.clone().unwrap_or_else(|| format!("field_{idx}"));
                     field_values.insert(name, val);
                 }
@@ -11119,6 +11145,52 @@ mod tests {
         assert!(
             matches!(interp.env.borrow().get("mapping"), Some(Value::Dict(items)) if items.borrow().len() == 1)
         );
+    }
+
+    #[test]
+    fn question_mark_propagates_out_of_a_nested_operand_position() {
+        // `?` on a failing call produces a Value::Return sentinel meant to
+        // unwind the *enclosing function* immediately. Used directly as a
+        // statement's own value (`return fail()?`, `x = fail()?`) that
+        // sentinel is checked and re-propagated -- but used as a
+        // subexpression inside a larger expression (a call argument, a
+        // collection literal element, a binary/unary operand), the
+        // surrounding expression evaluation has to detect that same
+        // sentinel and re-propagate it too, instead of silently treating
+        // the raw error object as an ordinary value and letting execution
+        // continue. Every case below runs a `fail()?` in exactly one such
+        // position and checks the enclosing function actually stopped and
+        // returned the error, rather than pressing on to compute `999`.
+        let preamble = "class MyError:\n    message: str\n\nclass Wrapper:\n    value: int\n\ndef fail() -> int | MyError:\n    return MyError(\"boom\")\n\n";
+        let cases = [
+            // Call argument.
+            "def run() -> int | MyError:\n    items: list[int] = []\n    items.append(fail()?)\n    return 999\nresult = run()\n",
+            // Construct argument.
+            "def run() -> int | MyError:\n    w = Wrapper(fail()?)\n    return 999\nresult = run()\n",
+            // List literal element.
+            "def run() -> int | MyError:\n    xs = [fail()?]\n    return 999\nresult = run()\n",
+            // Set literal element.
+            "def run() -> int | MyError:\n    xs = {fail()?}\n    return 999\nresult = run()\n",
+            // Dict literal value.
+            "def run() -> int | MyError:\n    d = {\"k\": fail()?}\n    return 999\nresult = run()\n",
+            // Binary operand.
+            "def run() -> int | MyError:\n    total = 1 + fail()?\n    return 999\nresult = run()\n",
+            // Unary operand.
+            "def run() -> int | MyError:\n    total = -fail()?\n    return 999\nresult = run()\n",
+        ];
+        for source in cases {
+            let full_source = format!("{preamble}{source}");
+            let module = parse(&full_source).unwrap();
+            let mut interp = Interpreter::new();
+            interp.eval_module(&module).unwrap();
+            let result = interp.env.borrow().get("result");
+            match result {
+                Some(Value::Object { ref class_name, .. }) if class_name == "MyError" => {}
+                other => panic!(
+                    "expected `?` to propagate the MyError out of run() for {source:?}, got {other:?}"
+                ),
+            }
+        }
     }
 
     #[test]

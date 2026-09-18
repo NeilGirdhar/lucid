@@ -575,11 +575,11 @@ class ModuleStmt(Stmt):
     body: list[Stmt]
 
 class Import(Stmt):
-    module: str
+    module_name: str
     alias: str | none
 
 class FromImport(Stmt):
-    module: str
+    module_name: str
     names: list[ImportedName]
 
 class ExprStmt(Stmt):

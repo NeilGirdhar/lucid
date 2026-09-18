@@ -47,11 +47,9 @@ it, not a claim that it's close to done.
   trait/implement/module blocks, comprehensions, error recovery, and
   more) is listed at the top of the file itself. Runs under the reference
   interpreter and successfully parses `lexer.lucid`'s own source
-  (`parser_demo.lucid` proves this — see below). Does *not* yet parse its
-  own source or `ast.lucid`'s -- both are larger than `lexer.lucid` and
-  self-parsing either currently exceeds a few minutes under the debug
-  interpreter, past where it's practical to just wait it out; worth a
-  closer look; see "Open question" below.
+  (`parser_demo.lucid` proves this — see below), `ast.lucid`'s (~15s), and
+  its own (~99s, being much larger and almost entirely one big `class
+  Parser:` body).
 - `parser_demo.lucid` — parses a small sample program, then reads and
   parses `lexer.lucid`'s own source. The second part is the self-hosting
   proof point for this piece: Lucid source a human wrote, run by the
@@ -95,7 +93,7 @@ called for. Self-parsing (tokenize + parse) `lexer.lucid`'s ~500 lines
 takes on the order of 30 seconds for the same reason, one layer up.
 
 None compile under `lucid run --native` yet — see "Native codegen
-gaps" below. Both run correctly under the reference interpreter, which is
+gaps" below. All run correctly under the reference interpreter, which is
 the primary target for this work; native is a stretch goal.
 
 ## Cross-file imports actually work now
@@ -114,6 +112,67 @@ and removing three redundant single-file checks in `lucid-cli`'s native
 entry points that were still hitting the old `Any` fallback independently
 even after the first two fixes landed. See those commits' messages for
 the full story.
+
+## `?` silently no-op'd inside a nested expression (fixed)
+
+The most serious bug found writing any of this: `?` failing inside a
+function-call argument, a construct argument, a list/set/dict literal
+element, or a binary/unary operand didn't propagate — it silently handed
+the raw error object to whatever was evaluating that subexpression, as if
+it were the ordinary success value, and execution just continued.
+
+`items.append(parse_one()?)` is the shape that surfaced it:
+`Expr::Propagate`'s runtime handler does the real work of turning a
+failing call into a `Value::Return` sentinel meant to unwind the
+*enclosing function* — but nothing at the call site that evaluates
+`items.append(...)`'s arguments checked for that sentinel before handing
+the value to `append`. `append` received the error object as an ordinary
+argument, the statement "succeeded", and whatever loop was calling
+`parse_one()` kept going. When the loop's own exit condition depended on
+progress that same failed call was supposed to make — exactly the shape
+of `parser.lucid`'s `while not self.check("DEDENT"): body.append(self.
+parse_class_member()?)` — the result wasn't a wrong answer, it was an
+infinite loop: `self.pos` never advances on a failed parse, so the next
+iteration re-parses the identical failing token forever.
+
+This is what was actually behind the "self-parsing `ast.lucid` hangs"
+symptom investigated (and initially misdiagnosed as a performance
+problem) earlier in this file's history — `ast.lucid` has a field
+literally named `module` (`class Import(Stmt): module: str`), and
+`module` is Lucid's own reserved keyword ([Design notes](#design-notes)
+already covers `out` and capitalized-first-letter names as two other
+reserved-name surprises), so parsing it always failed — and every one of
+those failures hit this bug instead of surfacing as a normal parse error.
+Fixing the runtime bug turned the symptom from "hangs forever" into
+"fails in under a second with a clear message", which is what led to
+finding and fixing the actual field-naming collision
+(`module` → `module_name`) in minutes instead of chasing a performance
+ghost. Both `parser.lucid` and `interpreter.lucid` lean on this exact
+`x.append(y()?)` / `Ctor(y()?)` pattern throughout, so this one runtime
+fix is likely what makes self-parsing `ast.lucid` and `parser.lucid`
+itself (not just `lexer.lucid`) possible at all — see the `parser.lucid`
+entry above.
+
+Fixed in `lucid-runtime` by adding an `eval_operand!` macro — evaluate,
+check for `Value::Return`, re-propagate if found, otherwise use the value
+— and applying it everywhere a subexpression's value is used for
+something other than being returned directly: call arguments (plain,
+spread, and gather-spread), construct arguments, list/set/dict literal
+elements, and binary/unary operands. This was found and fixed at the
+specific sites this work actually exercises, not via an exhaustive audit
+of every expression kind `eval_expr` handles (a ~10,000-line match) — a
+real audit of the rest is worth doing separately.
+
+A related but distinct gap, *not* fixed here: `?`'s error-recognition
+itself (both in the checker and, separately, in this runtime) picks the
+error variant(s) out of a union by a literal name-suffix check
+(`ends_with("Error")`), not by any structural signal — a custom error
+type not named `*Error` (e.g. `MyErr`) is invisible to `?` even once the
+`Value::Return`-propagation bug above is fixed, and silently behaves as
+a success value instead. Every error type in this codebase already
+follows the `*Error` convention, so it hasn't blocked anything here, but
+it's a real, separate inconsistency between the checker's (partial, with
+a same-file fallback) and the runtime's (none) handling of the same rule.
 
 ## Native codegen gaps
 
