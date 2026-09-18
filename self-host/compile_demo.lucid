@@ -98,5 +98,6 @@ compile_path_to_file("lists (typed empty + append + index + len, non-empty liter
 compile_path_to_file("mutation (attribute assignment, mutation through a function call, -> none)", "self-host/compile_demo_programs/mutation.lucid", "self-host/compile_demo_mutation.c")
 compile_path_to_file("methods (methods with self: reading/mutating fields, calling another method, parameters, str/bool return types)", "self-host/compile_demo_programs/methods.lucid", "self-host/compile_demo_methods.c")
 compile_path_to_file("dicts (dict[str, V] literal + .get(), module-level and local, empty with a declared type)", "self-host/compile_demo_programs/dicts.lucid", "self-host/compile_demo_dicts.c")
+compile_path_to_file("module_scope (a module-level variable read by a function and by a class method, and shadowed by a same-named local)", "self-host/compile_demo_programs/module_scope.lucid", "self-host/compile_demo_module_scope.c")
 compile_to_file("broken (supposed to fail checking)", broken_source, "self-host/compile_demo_broken.c")
 compile_path_to_file("examples/vectors.lucid (classes, dispatch, strings -- a real Lucid program)", "examples/vectors.lucid", "self-host/compile_demo_vectors.c")

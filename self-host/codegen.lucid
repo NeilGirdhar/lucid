@@ -268,6 +268,21 @@ def method_c_name(class_name: str, method_name: str) -> str:
 class Codegen:
     functions: FuncTable
     classes: dict[str, ClassSig]
+    # A module-level variable, compiled as a real C global (`static
+    # <ctype> <name>;`), initialized by the first statements
+    # codegen_entry_point's `main()` runs, and readable from every
+    # function/method body afterward -- matching checker.lucid's own
+    # module_scope (see its header comment there for why: `x: int = 5`
+    # at module level, then `def f() -> int: return x + 1`, is real,
+    # verified Lucid, not something checker.lucid rejects). Populated
+    # once, in codegen_module, before any class/function/method is
+    # emitted; every function/method's own `known` is seeded with a
+    # COPY of this (see copy_type_scope) so its own locals never leak
+    # back into it. `codegen_entry_point`'s own generated `main()` is
+    # the one place that must NOT redeclare these names as its own
+    # C locals (they're already declared at file scope) -- see its
+    # `exclude` parameter to codegen_body.
+    module_scope: dict[str, LType]
 
     def collect_declarations(self, stmts: list[Stmt]):
         for stmt in stmts:
@@ -1162,7 +1177,15 @@ class Codegen:
     # the same straight-line body but after codegen_block would have
     # inferred it lazily), then emit, with every local (besides a
     # parameter) declared once, hoisted to the top.
-    def codegen_body(self, params: list[Param], body: list[Stmt], known: dict[str, LType]) -> str:
+    # `exclude` is only ever non-empty for codegen_entry_point's own
+    # call: a top-level name is already declared as a real C global
+    # (see module_scope's header comment), so `main()`'s own body must
+    # not ALSO hoist a local declaration for it -- that would shadow
+    # the global with an uninitialized local for the rest of `main()`,
+    # so the initializing assignment further down in the same body
+    # would write to the wrong variable. Every other caller
+    # (codegen_function, codegen_method) passes an empty set here.
+    def codegen_body(self, params: list[Param], body: list[Stmt], known: dict[str, LType], exclude: set[str]) -> str:
         self.infer_local_types(body, known)
         local_names: set[str] = {}
         self.collect_local_names(body, local_names)
@@ -1171,7 +1194,7 @@ class Codegen:
             param_names.add(p.name)
         declarations: list[str] = []
         for name in local_names:
-            if name not in param_names:
+            if name not in param_names and name not in exclude:
                 match known.get(name, none) as t:
                     case LType:
                         declarations.append("    " + c_type_of(t) + " " + name + ";")
@@ -1182,12 +1205,12 @@ class Codegen:
 
     def codegen_function(self, fn: FunctionDef, sig: FuncSig) -> str:
         param_list = self.c_param_list(fn.params)
-        known: dict[str, LType] = {:}
+        known: dict[str, LType] = copy_type_scope(self.module_scope)
         i = 0
         while i < len(fn.params) and i < len(sig.param_types):
             known[fn.params[i].name] = sig.param_types[i]
             i = i + 1
-        full_body = self.codegen_body(fn.params, fn.body, known)
+        full_body = self.codegen_body(fn.params, fn.body, known, {})
         c_name = mangled_name(self.functions, sig)
         return c_type_of(sig.return_type) + " " + c_name + "(" + param_list + ") {\n" + full_body + "\n}"
 
@@ -1196,7 +1219,10 @@ class Codegen:
     # own `int main(void)` (see codegen_module's header comment).
     def codegen_entry_point(self, top_level: list[Stmt]) -> str:
         known: dict[str, LType] = {:}
-        full_body = self.codegen_body([], top_level, known)
+        module_names: set[str] = {}
+        for name in self.module_scope:
+            module_names.add(name)
+        full_body = self.codegen_body([], top_level, known, module_names)
         return "int main(void) {\n" + full_body + "\n}"
 
     def codegen_forward_decl(self, fn: FunctionDef, sig: FuncSig) -> str:
@@ -1223,6 +1249,14 @@ class Codegen:
                     pass
                 case _:
                     top_level.append(stmt)
+        # Learn every module-level name's type before emitting anything
+        # that might reference one (a function/method body, or a later
+        # top-level statement) -- reusing the exact machinery a
+        # function's own local-variable pre-pass already uses
+        # (infer_local_types), since "the module's top-level statements"
+        # and "a function's own body" are the same kind of statement
+        # list here.
+        self.infer_local_types(top_level, self.module_scope)
         parts: list[str] = [runtime_prelude, ""]
         # Every class's forward decl (`typedef struct Name Name;`)
         # first, in one pass, before any class's full struct body --
@@ -1271,6 +1305,30 @@ class Codegen:
                             pass
                 case _:
                     pass
+        # Every module-level name as a real, uninitialized (per C's own
+        # zero-initialization of `static` storage) C global -- declared
+        # here, after every struct/list[T]/dict[str, V] type it could
+        # possibly need is already defined, and initialized by
+        # codegen_entry_point's own generated `main()` instead (C
+        # forbids a non-constant initializer on a `static` global, and
+        # `lucid_dict_str_str_of(...)`, say, is a function call, not a
+        # compile-time constant). Sorted by name -- dict iteration order
+        # in this self-hosted compiler's OWN execution isn't guaranteed
+        # stable across runs (the reference interpreter's own
+        # Value::Dict is a HashMap), and while an unordered set of
+        # independent `static` declarations is harmless either way, a
+        # reproducible, diffable generated-C file is worth the one
+        # extra call.
+        names: list[str] = []
+        for name in self.module_scope:
+            names.append(name)
+        for name in sorted(names):
+            match self.module_scope.get(name, none) as t:
+                case LType:
+                    parts.append("static " + c_type_of(t) + " " + name + ";")
+                case none:
+                    pass
+        parts.append("")
         # Every Lucid function is an ordinary, mangled C function here --
         # including one literally named `main`, which `lucid run` never
         # auto-invokes and which the reference native backend
@@ -1384,21 +1442,27 @@ def codegen_method_param_list(cls: ClassSig, params: list[Param]) -> str:
     return join_with(parts, ", ")
 
 def codegen_method(cg: Codegen, cls: ClassSig, fn: FunctionDef, sig: FuncSig) -> str:
-    known: dict[str, LType] = {:}
+    known: dict[str, LType] = copy_type_scope(cg.module_scope)
     known["self"] = ClassType(cls.name)
     i = 1
     while i < len(fn.params) and i - 1 < len(sig.param_types):
         known[fn.params[i].name] = sig.param_types[i - 1]
         i = i + 1
-    full_body = cg.codegen_body(fn.params, fn.body, known)
+    full_body = cg.codegen_body(fn.params, fn.body, known, {})
     c_name = method_c_name(cls.name, fn.name)
     return c_type_of(sig.return_type) + " " + c_name + "(" + codegen_method_param_list(cls, fn.params) + ") {\n" + full_body + "\n}"
 
 def codegen_method_forward_decl(cls: ClassSig, fn: FunctionDef, sig: FuncSig) -> str:
     return c_type_of(sig.return_type) + " " + method_c_name(cls.name, fn.name) + "(" + codegen_method_param_list(cls, fn.params) + ");"
 
+def copy_type_scope(scope: dict[str, LType]) -> dict[str, LType]:
+    copied: dict[str, LType] = {:}
+    for key in scope:
+        copied[key] = scope[key]
+    return copied
+
 def new_codegen() -> Codegen:
-    return Codegen(new_func_table(), {:})
+    return Codegen(new_func_table(), {:}, {:})
 
 def codegen_module(stmts: list[Stmt]) -> str:
     cg = new_codegen()

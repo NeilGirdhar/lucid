@@ -1258,6 +1258,9 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: dict literal keys must be str in this subset, got int",
         "ERROR: dict.get() requires (str, int) arguments in this subset",
         "ERROR: print() of a dict value is not supported in this subset",
+        "--- a module-level variable is readable inside a function ---\n(no errors)",
+        "--- a module-level variable is readable inside a class method ---\n(no errors)",
+        "--- a local assignment shadows a module-level name of the same type ---\n(no errors)",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1332,7 +1335,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 13] = [
+    let cases: [(&str, &str); 14] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1348,6 +1351,10 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         ("mutation", "self-host/compile_demo_programs/mutation.lucid"),
         ("methods", "self-host/compile_demo_programs/methods.lucid"),
         ("dicts", "self-host/compile_demo_programs/dicts.lucid"),
+        (
+            "module_scope",
+            "self-host/compile_demo_programs/module_scope.lucid",
+        ),
         ("vectors", "examples/vectors.lucid"),
     ];
 

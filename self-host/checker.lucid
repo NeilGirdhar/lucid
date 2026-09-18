@@ -110,6 +110,21 @@ class Checker:
     functions: FuncTable
     classes: dict[str, ClassSig]
     errors: list[CheckError]
+    # A module-level variable is visible (read-only, matching
+    # docs/scope.md's "assignment is always local" rule -- a function
+    # can *read* an outer name, but any bare assignment to that name
+    # inside the function rebinds a fresh local, never the module-level
+    # one) inside every function and method body, not just top-level
+    # code -- verified directly (`x: int = 5` at module level, then
+    # `def f() -> int: return x + 1`, prints `6`). Populated once, by
+    # check_module, before any function/method/top-level-statement body
+    # is checked (so a function defined *before* a module-level
+    # variable in the source can still see it -- the same forward-
+    # reference tolerance every other declaration in this subset
+    # already has, via collect_declarations running first). Each
+    # function/method's own `known` starts as a COPY of this (see
+    # copy_type_scope) so a local reassignment never leaks back into it.
+    module_scope: dict[str, LType]
 
     def error(self, message: str, span: Span):
         self.errors.append(CheckError(message, span))
@@ -277,22 +292,35 @@ class Checker:
         for stmt in stmts:
             match stmt as result:
                 case ClassDef:
+                    pass
+                case FunctionStmt:
+                    pass
+                case _:
+                    top_level.append(stmt)
+        # Top-level statements are checked FIRST, before any function or
+        # method body -- the same way is a real Lucid script has no
+        # `main`, its top-level statements just run, in order, the way
+        # examples/*.lucid is actually written, and checking them first
+        # populates self.module_scope with every module-level variable's
+        # type before any function/method that might read one gets
+        # checked (see module_scope's own header comment for why order
+        # doesn't otherwise matter here: every call/construct/method
+        # resolution only ever depends on collect_declarations's
+        # signatures, never on whether a callee's *body* has been
+        # checked yet).
+        if len(top_level) > 0:
+            self.check_block(top_level, self.module_scope, none, false, false)
+        for stmt in stmts:
+            match stmt as result:
+                case ClassDef:
                     self.check_class_methods(result)
                 case FunctionStmt:
                     self.check_function(result.function)
                 case _:
-                    top_level.append(stmt)
-        # A real Lucid script has no `main` -- its top-level statements
-        # just run, in order, the way examples/*.lucid is actually
-        # written. Check them the same way as any function body, with
-        # their own fresh (empty) starting scope, matching the module
-        # scope a top-level statement actually runs in.
-        if len(top_level) > 0:
-            module_scope: dict[str, LType] = {:}
-            self.check_block(top_level, module_scope, none, false, false)
+                    pass
 
     def check_function(self, fn: FunctionDef):
-        known: dict[str, LType] = {:}
+        known: dict[str, LType] = copy_type_scope(self.module_scope)
         for p in fn.params:
             match resolve_type_expr(p.type_annotation) as pt:
                 case LType:
@@ -983,7 +1011,7 @@ class Checker:
 # identical: move the logic to a free function). `checker` stands in
 # for the `Checker` instance's own `self`.
 def check_method(checker: Checker, cls: ClassSig, fn: FunctionDef):
-    known: dict[str, LType] = {:}
+    known: dict[str, LType] = copy_type_scope(checker.module_scope)
     known["self"] = ClassType(cls.name)
     i = 1
     while i < len(fn.params):
@@ -996,8 +1024,14 @@ def check_method(checker: Checker, cls: ClassSig, fn: FunctionDef):
         i = i + 1
     checker.check_function_body(fn, known)
 
+def copy_type_scope(scope: dict[str, LType]) -> dict[str, LType]:
+    copied: dict[str, LType] = {:}
+    for key in scope:
+        copied[key] = scope[key]
+    return copied
+
 def new_checker() -> Checker:
-    return Checker(new_func_table(), {:}, [])
+    return Checker(new_func_table(), {:}, [], {:})
 
 def check_program(stmts: list[Stmt]) -> list[CheckError]:
     checker = new_checker()

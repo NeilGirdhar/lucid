@@ -186,7 +186,41 @@ pieces is close to feature parity with its Rust counterpart.
   arguments and returning `V` — the actual feature
   `self-host/lexer.lucid` needs (its own `keywords`/`single` tables).
   `append`/`pop`/`get`, plus class methods (see below), are the only
-  method calls this subset supports.
+  method calls this subset supports. A module-level variable (`x: int
+  = 5` at the top of a file, or `keywords: dict[str, str] = {...}`) is
+  readable inside every function and method body — verified directly
+  first (`x: int = 5` then `def f() -> int: return x + 1` prints `6`
+  under `lucid run`) — but only if the module-level declaration comes
+  *before* the function/method in the source: a function reading a
+  module-level name declared *later* in the file is rejected by the
+  reference checker (`undefined variable`), unlike a function/class,
+  which can freely forward-reference another one declared later. This
+  subset doesn't enforce that ordering — every module-level
+  declaration is visible to every function/method regardless of
+  source order, a real, deliberate over-permissiveness relative to the
+  reference checker, not attempted here (this subset's `check_module`
+  already checks every function/class in one forward-reference-
+  tolerant pass; enforcing declaration order for module-level
+  *variables* specifically would mean checking them interleaved with
+  the functions that read them, undoing that simplification for a case
+  `self-host/lexer.lucid` itself never needs, since its own
+  `keywords`/`single` tables are always declared before anything that
+  reads them). A name that's *read* inside a function/method, never
+  assigned there, sees the module-level value; a name that's
+  *assigned* there gets its own local, shadowing the module-level one
+  for the rest of that call, matching docs/scope.md's "assignment is
+  always local" rule exactly (verified: `count: int = 0` then `def
+  bump() -> int: count = 5; return count` returns `5` without changing
+  the module-level `count`) — except for the one case this subset
+  doesn't replicate either: the reference checker treats a name
+  assigned *anywhere* in a function as local for the *whole* function,
+  so reading it before that assignment is itself an error (`count =
+  count + 1` is rejected as "undefined variable 'count'", the same
+  shape as Python's own `UnboundLocalError`) — this subset's simpler
+  copy-the-module-scope-in seeding doesn't catch that case (it would
+  silently read the *module-level* value instead of erroring), a real,
+  narrower gap than the ordering one above, also not needed by
+  anything this subset actually compiles.
   A function or `dispatch def` named
   `print`/`range`/`len`/`freeze` is rejected outright, since
   `check_call`/`codegen_expr` recognize those names ahead of consulting
@@ -411,7 +445,41 @@ pieces is close to feature parity with its Rust counterpart.
   compiles to a `void` C function; a bare `return;` inside one compiles
   to a bare `return;` in C, same as it always could have, now that
   `none` is checked as a real return type instead of being rejected
-  outright. Lucid has no subprocess/exec builtin, so codegen stops
+  outright. A method (`def method(self, ...): ...`) compiles to an
+  ordinary C function taking `ClassName *self` as an explicit first
+  parameter, built directly from the class's own name rather than
+  stored in the method's own parameter list (see `checker.lucid`'s
+  entry above) — named by a small `method_c_name(class_name,
+  method_name)` free function (`"lucid_method_" + class_name + "_" +
+  method_name`), deliberately not routed through `mangled_name`/the
+  function table a free function's own overloads go through, since a
+  method can't be overloaded here (one method per name per class) and
+  this naming can never collide with a mangled free function or
+  another class's same-named method; `obj.method(args)` compiles to a
+  plain C call with the receiver prepended to the argument list. A
+  module-level variable (`x: int = 5` at the top of a file) compiles
+  to `static <ctype> x;`, an ordinary C file-scope global, emitted
+  right after every struct/list/dict type it could reference but
+  before any function/method forward declaration; C forbids a
+  non-constant initializer on a `static` global (a
+  `lucid_dict_str_str_of(...)` call isn't one), so each global's
+  actual initialization happens as an ordinary statement inside the
+  synthesized C `main()` instead, in the same place top-level code
+  already runs. `codegen_body` gained an `exclude: set[str]`
+  parameter so `main()`'s own hoisted-locals pass doesn't redeclare a
+  name that's already a real C global — only `codegen_entry_point`
+  passes a non-empty one, built from `self.module_scope`'s own keys.
+  Every function's and method's own local type-scope is seeded with a
+  copy of `self.module_scope` (via a small `copy_type_scope` free
+  function, duplicated identically in `checker.lucid` and
+  `codegen.lucid`, matching this pipeline's no-shared-helpers-between-
+  files pattern) so a function's own local reassignment of a
+  same-named variable never leaks back into the shared module scope.
+  Module-level names are iterated in sorted order everywhere codegen
+  depends on that order (both the `static` declarations and the
+  init statements in `main`), since a Lucid `dict`'s own key order
+  isn't guaranteed stable, matching an earlier determinism fix to
+  lucid-runtime's own object repr. Lucid has no subprocess/exec builtin, so codegen stops
   at emitting C text — invoking a system C compiler on it is necessarily
   a driver step outside Lucid, the same role
   `compiler/crates/lucid-codegen` itself plays (it also just shells out
@@ -422,7 +490,7 @@ pieces is close to feature parity with its Rust counterpart.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles twelve hand-written programs, each a
+  `codegen.lucid`. Also compiles thirteen hand-written programs, each a
   real file under `self-host/compile_demo_programs/` (recursion,
   iteration, `%`/`and`/`or`/comparisons, `//`/`%`'s exact Euclidean
   semantics on all four sign combinations, `bools` — bool literals,
@@ -448,11 +516,17 @@ pieces is close to feature parity with its Rust counterpart.
   changed, not a copy — `methods` — a method reading and mutating
   `self`'s own fields, one method calling another method on the same
   `self`, a method taking a parameter beyond `self`, and `str`/`bool`
-  method return types — and `dicts` — a module-level `dict[str, str]`
+  method return types — `dicts` — a module-level `dict[str, str]`
   literal and `.get()`, the same inside a function body (a fresh dict
   built each call, the actual shape `self-host/lexer.lucid`'s own
   `keywords`/`single` tables use), and an empty `dict[str, int]`
-  literal with a declared type), plus one
+  literal with a declared type — and `module_scope` — a module-level
+  `int` read by a plain function, a module-level `dict[str, str]` read
+  by a class method (the same `keywords.get(...)` shape
+  `self-host/lexer.lucid` itself needs), and a module-level `int`
+  shadowed by a same-named local assignment inside a function, which
+  must read back the original module-level value afterward, not the
+  local), plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen
   instead of emitting broken C. `shapes.lucid` from `examples/` isn't
@@ -460,9 +534,9 @@ pieces is close to feature parity with its Rust counterpart.
   subset rather than emulated: lucid-runtime's `freeze` mutates a
   shared `is_frozen` flag on a reference-counted object, and the
   reference native backend tracks the same thing at runtime on a boxed
-  value, but this subset's classes are plain by-value C structs with no
-  aliasing at all, so neither the interpreter's nor the reference
-  compiler's actual `freeze` semantics has anything to attach to here.
+  value, but this subset's classes carry no such flag at all, so
+  neither the interpreter's nor the reference compiler's actual
+  `freeze` semantics has anything to attach to here.
   Every valid program's compiled binary is checked the same
   way `vectors`' is: its output must match `lucid run` on that exact
   source file exactly — not a hardcoded expected string — the same

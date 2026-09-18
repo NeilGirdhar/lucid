@@ -183,3 +183,9 @@ report("a dict literal with a non-str key is rejected", "def bad() -> int:\n    
 report("dict.get() with the wrong argument types is rejected", "def bad() -> int:\n    d: dict[str, int] = {:}\n    d.get(1, 0)\n    return 0\n")
 
 report("print() of a dict is rejected", "def bad() -> int:\n    d: dict[str, int] = {:}\n    print(d)\n    return 0\n")
+
+report("a module-level variable is readable inside a function", "x: int = 5\n\ndef ok() -> int:\n    return x + 1\n\nprint(ok())\n")
+
+report("a module-level variable is readable inside a class method", "keywords: dict[str, str] = {\n    \"true\": \"TRUE\",\n}\n\nclass Lexer:\n    pos: int\n\n    def lookup(self, text: str) -> str:\n        return keywords.get(text, \"IDENT\")\n\nl = Lexer(0)\nprint(l.lookup(\"true\"))\n")
+
+report("a local assignment shadows a module-level name of the same type", "count: int = 0\n\ndef ok() -> int:\n    count = 5\n    return count\n\nprint(ok())\nprint(count)\n")
