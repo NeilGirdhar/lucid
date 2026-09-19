@@ -1202,10 +1202,10 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: print() of a 'Outer' value is not supported in this subset",
         "ERROR: freeze() is not supported in this subset",
         "--- str + str is supported (str concatenation) ---\n(no errors)",
-        "ERROR: operator SUB requires two int operands, got str and str",
+        "ERROR: operator SUB requires two int or two float operands, got str and str",
         "--- str == str and str < str are supported ---\n(no errors)",
         "ERROR: operator EQ is not supported on (int, bool) in this subset",
-        "ERROR: operator ADD requires two int operands, got bool and int",
+        "ERROR: operator ADD requires two int or two float operands, got bool and int",
         "ERROR: operator AND requires two bool operands, got int and int",
         "ERROR: operator NOT requires a bool operand, got int",
         "ERROR: operator NEG requires an int operand, got bool",
@@ -1274,7 +1274,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: print() of a union-typed value is not supported in this subset",
         "ERROR: '?' is only supported on a union return type in this subset",
         "ERROR: '?' requires a union type with exactly one error variant (a class whose name ends in 'Error') in this subset",
-        "ERROR: '?' requires exactly one non-error member in this subset",
+        "--- '?' on a union with more than one non-error member is supported ---\n(no errors)",
         "ERROR: '?' propagates ItemError, but the enclosing function's return type (int) doesn't include it",
         "ERROR: '?' used outside a function",
         "--- '?' as a Binary operand is supported (hoisted ahead of the statement) ---\n(no errors)",
@@ -1297,11 +1297,13 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- a subtype value satisfies a plain function's base-class-typed parameter ---\n(no errors)",
         "--- a subtype value satisfies a list.append() base-class-typed element type ---\n(no errors)",
         "ERROR: pattern type Other is not part of the same sealed class hierarchy as 'Node'",
-        "ERROR: match on a sealed class hierarchy requires a trailing 'case _:' in this subset (exhaustively listing every concrete subclass isn't supported)",
+        "--- a sealed class hierarchy match without a trailing wildcard, covering every concrete subclass, is supported ---\n(no errors)",
+        "ERROR: match on 'Node' is not exhaustive: no case for 'NameNode'",
         "--- a union return type that's a strict subset of another is supported ---\n(no errors)",
         "--- a union-typed parameter is supported ---\n(no errors)",
         "--- dict item assignment is supported, including overwriting an existing key ---\n(no errors)",
-        "ERROR: index assignment is only supported on dict[str, T] in this subset",
+        "ERROR: list index must be int, got str",
+        "ERROR: index assignment is only supported on dict[str, T]/list[T] in this subset",
         "--- a direct dict[str, T] index read is supported ---\n(no errors)",
         "--- set[str] with add() and in/not in is supported ---\n(no errors)",
         "ERROR: set.add() requires a single argument of type str",
@@ -1315,6 +1317,17 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- str.replace() is supported ---\n(no errors)",
         "ERROR: str.replace() requires two str arguments in this subset",
         "--- bidirectional empty-literal inference for a method-call argument is supported ---\n(no errors)",
+        "--- float arithmetic and comparison operators are supported ---\n(no errors)",
+        "ERROR: operator ADD requires two int or two float operands, got float and int",
+        "--- / (true division) is supported on two ints or two floats ---\n(no errors)",
+        "ERROR: operator DIV requires two int or two float operands, got float and int",
+        "--- ** (power) is supported on two ints ---\n(no errors)",
+        "ERROR: operator POW requires two int operands, got float and int",
+        "--- list[T] index assignment is supported ---\n(no errors)",
+        "ERROR: list item expects int, got str",
+        "--- str(bool)/int(float)/float(int) conversions are supported ---\n(no errors)",
+        "--- len() on a dict[str, T] is supported ---\n(no errors)",
+        "--- '?' as a match statement's own subject is supported ---\n(no errors)",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1389,7 +1402,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 20] = [
+    let cases: [(&str, &str); 21] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1429,6 +1442,10 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         (
             "codegen_gaps",
             "self-host/compile_demo_programs/codegen_gaps.lucid",
+        ),
+        (
+            "interpreter_gaps",
+            "self-host/compile_demo_programs/interpreter_gaps.lucid",
         ),
         ("vectors", "examples/vectors.lucid"),
     ];

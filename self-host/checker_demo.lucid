@@ -218,7 +218,7 @@ report("'?' on a union with no error variant is rejected", "def get(flag: bool) 
 
 report("'?' on a union with more than one error variant is rejected", "class FooError:\n    message: str\n\nclass BarError:\n    message: str\n\ndef get(flag: bool) -> int | FooError | BarError:\n    if flag:\n        return 1\n    return FooError(\"bad\")\n\ndef bad() -> int:\n    x = get(true)?\n    return x\n")
 
-report("'?' on a union with more than one non-error member is rejected", "class FooError:\n    message: str\n\ndef get(flag: bool) -> int | bool | FooError:\n    if flag:\n        return 1\n    return FooError(\"bad\")\n\ndef bad() -> int:\n    x = get(true)?\n    return x\n")
+report("'?' on a union with more than one non-error member is supported", "class FooError:\n    message: str\n\ndef get(flag: bool) -> int | bool | FooError:\n    if flag:\n        return 1\n    return FooError(\"bad\")\n\ndef ok() -> int | bool | FooError:\n    x = get(true)?\n    return x\n")
 
 report("'?' whose error type the enclosing function's return type doesn't include is rejected", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef bad() -> int:\n    x = get(true)?\n    return x\n")
 
@@ -266,7 +266,9 @@ report("a subtype value satisfies a list.append() base-class-typed element type"
 
 report("a match pattern outside the subject's own sealed hierarchy is rejected", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass Other:\n    n: int\n\ndef bad(n: Node) -> int:\n    match n as result:\n        case Other:\n            return result.n\n        case _:\n            return 0\n    return 0\n")
 
-report("a sealed class hierarchy match without a trailing wildcard is rejected", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef bad(n: Node) -> int:\n    match n as result:\n        case NumberNode:\n            return result.value\n    return 0\n")
+report("a sealed class hierarchy match without a trailing wildcard, covering every concrete subclass, is supported", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef ok(n: Node) -> int:\n    match n as result:\n        case NumberNode:\n            return result.value\n    return 0\n")
+
+report("a sealed class hierarchy match without a trailing wildcard, missing a case, is rejected", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass NameNode(Node):\n    name: str\n\ndef bad(n: Node) -> int:\n    match n as result:\n        case NumberNode:\n            return result.value\n    return 0\n")
 
 report("a union return type that's a strict subset of another is supported", "class Result:\n    value: int\n\nclass ItemError:\n    message: str\n\nclass OtherError:\n    message: str\n\ndef inner(ok: bool) -> Result | ItemError:\n    if ok:\n        return Result(1)\n    return ItemError(\"bad\")\n\ndef outer(ok: bool) -> Result | ItemError | OtherError:\n    return inner(ok)\n\ndef ok() -> int:\n    match outer(true) as r:\n        case Result:\n            print(r.value)\n        case ItemError:\n            print(r.message)\n        case OtherError:\n            print(r.message)\n    return 0\n")
 
@@ -274,7 +276,9 @@ report("a union-typed parameter is supported", "class Item:\n    value: int\n\nd
 
 report("dict item assignment is supported, including overwriting an existing key", "class Item:\n    value: int\n\ndef ok() -> int:\n    reg: dict[str, Item] = {:}\n    reg[\"a\"] = Item(1)\n    reg[\"a\"] = Item(2)\n    match reg.get(\"a\", none) as found:\n        case Item:\n            print(found.value)\n        case none:\n            print(-1)\n    return 0\n")
 
-report("dict item assignment on a non-dict receiver is rejected", "def bad() -> int:\n    xs: list[int] = [1, 2]\n    xs[\"a\"] = 1\n    return 0\n")
+report("list[T] index assignment with a non-int index is rejected", "def bad() -> int:\n    xs: list[int] = [1, 2]\n    xs[\"a\"] = 1\n    return 0\n")
+
+report("index assignment on a receiver that's neither dict[str, T] nor list[T] is rejected", "def bad() -> int:\n    x: int = 5\n    x[\"a\"] = 1\n    return 0\n")
 
 report("a direct dict[str, T] index read is supported", "def ok() -> int:\n    d: dict[str, int] = {\"a\": 1}\n    print(d[\"a\"])\n    return 0\n")
 
@@ -301,3 +305,25 @@ report("str.replace() is supported", "def ok() -> int:\n    print(\"a.b.a\".repl
 report("str.replace() with a non-str argument is rejected", "def bad() -> str:\n    return \"a.b\".replace(\".\", 1)\n")
 
 report("bidirectional empty-literal inference for a method-call argument is supported", "class Bag:\n    prefix: str\n\n    def combine(self, items: list[str]) -> str:\n        result = self.prefix\n        for item in items:\n            result = result + item\n        return result\n\ndef ok() -> int:\n    b = Bag(\"x:\")\n    print(b.combine([]))\n    return 0\n")
+
+report("float arithmetic and comparison operators are supported", "def ok() -> int:\n    x: float = 3.5\n    y: float = 1.5\n    print(x + y)\n    print(x - y)\n    print(x * y)\n    print(x < y)\n    print(x == y)\n    print(x != y)\n    return 0\n")
+
+report("a float operand mixed with an int operand is rejected", "def bad(x: float) -> float:\n    return x + 1\n")
+
+report("/ (true division) is supported on two ints or two floats", "def ok() -> int:\n    print(7 / 2)\n    x: float = 7.0\n    y: float = 2.0\n    print(x / y)\n    return 0\n")
+
+report("/ on mismatched operand types is rejected", "def bad(x: float) -> float:\n    return x / 2\n")
+
+report("** (power) is supported on two ints", "def ok() -> int:\n    print(2 ** 10)\n    return 0\n")
+
+report("** on a non-int operand is rejected", "def bad(x: float) -> float:\n    return x ** 2\n")
+
+report("list[T] index assignment is supported", "def ok() -> int:\n    xs: list[int] = [1, 2, 3]\n    xs[1] = 99\n    print(xs[1])\n    return 0\n")
+
+report("list[T] index assignment with the wrong value type is rejected", "def bad() -> int:\n    xs: list[int] = [1, 2, 3]\n    xs[1] = \"x\"\n    return 0\n")
+
+report("str(bool)/int(float)/float(int) conversions are supported", "def ok() -> int:\n    print(str(true))\n    print(int(3.7))\n    print(float(5))\n    return 0\n")
+
+report("len() on a dict[str, T] is supported", "def ok() -> int:\n    d: dict[str, int] = {\"a\": 1, \"b\": 2}\n    print(len(d))\n    return 0\n")
+
+report("'?' as a match statement's own subject is supported", "class Item:\n    value: int\n\nclass ItemError:\n    message: str\n\ndef maybe(n: int) -> Item | none | ItemError:\n    if n < 0:\n        return ItemError(\"bad\")\n    if n == 0:\n        return none\n    return Item(n)\n\ndef ok(n: int) -> int | ItemError:\n    match maybe(n)? as v:\n        case Item:\n            return v.value\n        case none:\n            return 0\n")

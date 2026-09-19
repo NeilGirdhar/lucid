@@ -75,7 +75,7 @@
 # counterpart covers.
 
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, SetExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, FloatLit, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, PassMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, Propagate, FunctionDef, Param, Span, FromImport, Import, Hoisted, hoist_propagate
-from .types import LType, IntType, BoolType, StrType, FloatType, ClassType, ListType, DictType, SetType, NoneType, UnionLType, type_name, types_equal, type_list_equal, type_list_assignable, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, has_any_signature, resolve_all_declarations, inherited_fields, is_subclass_of, class_assignable_to, union_has_none_member, union_member_type_equal
+from .types import LType, IntType, BoolType, StrType, FloatType, ClassType, ListType, DictType, SetType, NoneType, UnionLType, type_name, types_equal, type_list_equal, type_list_assignable, assignable_to, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, has_any_signature, resolve_all_declarations, inherited_fields, is_subclass_of, class_assignable_to, union_has_none_member, union_member_type_equal, sealed_siblings
 
 class CheckError:
     message: str
@@ -643,10 +643,17 @@ class Checker:
                         # reference semantics already covers in-place
                         # list mutation, see register_signature's
                         # `existing.append(sig)`, but a brand new key
-                        # needs a real item write). Index-assignment on
-                        # anything but a dict is still rejected --
-                        # nothing in this subset mutates a list or str by
-                        # index.
+                        # needs a real item write). `list[T]` index
+                        # assignment (`r.items[i.value] = v`, self-host/
+                        # interpreter.lucid's own `exec_assignment` --
+                        # mutating an *existing* index in place, unlike
+                        # `.append()`, which only ever grows a list) is
+                        # supported too, once codegen.lucid gained
+                        # `list[T]`'s own runtime bounds check (see
+                        # emit_list_type's `_set`, mirroring `_get`).
+                        # Index-assignment on anything else (a str) is
+                        # still rejected -- this subset's `str` is a
+                        # plain, immutable `const char *`.
                         receiver_type = self.check_expr(target.value, known)
                         key_type = self.check_expr(target.index, known)
                         match receiver_type as rt:
@@ -664,8 +671,22 @@ class Checker:
                                             self.error("dict value expects " + type_name(rt.value_type) + ", got " + type_name(vt), result.span)
                                     case none:
                                         pass
+                            case ListType:
+                                match key_type as kt2:
+                                    case IntType:
+                                        pass
+                                    case LType:
+                                        self.error("list index must be int, got " + type_name(kt2), result.span)
+                                    case none:
+                                        pass
+                                match value_type as vt2:
+                                    case LType:
+                                        if not class_assignable_to(self.classes, vt2, rt.element_type):
+                                            self.error("list item expects " + type_name(rt.element_type) + ", got " + type_name(vt2), result.span)
+                                    case none:
+                                        pass
                             case LType:
-                                self.error("index assignment is only supported on dict[str, T] in this subset", result.span)
+                                self.error("index assignment is only supported on dict[str, T]/list[T] in this subset", result.span)
                             case none:
                                 pass
                     case _:
@@ -800,7 +821,23 @@ class Checker:
     # loop encloses the match, never the match itself) has no
     # fallthrough case to emit for a gap.
     def check_match(self, m: MatchStmt, known: dict[str, LType], expected_return: LType | none, in_function: bool, in_loop: bool):
-        subject_type = self.check_expr(m.subject, known)
+        # `match self.call_builtin(func_name, values, result.span)? as
+        # builtin_result:` (self-host/interpreter.lucid's own `eval_expr`)
+        # -- a `?` directly as the match subject itself, a fourth
+        # position alongside the direct right-hand side of a plain
+        # assignment/return statement/bare expression statement.
+        # `check_propagate` already knows how to unwrap it (including
+        # down to a real union, when the underlying union has more than
+        # one non-error member -- see its own header comment); nothing
+        # else here needs to change, since a Propagate's own unwrapped
+        # type is used as `subject_type` exactly like any other
+        # expression's checked type would be.
+        subject_type: LType | none = none
+        match m.subject as msub:
+            case Propagate:
+                subject_type = self.check_propagate(msub, known, expected_return)
+            case _:
+                subject_type = self.check_expr(m.subject, known)
         match subject_type as st:
             case UnionLType:
                 # The whole rest of this method lives inside this arm,
@@ -922,16 +959,22 @@ class Checker:
     # narrows to a *concrete* class in the same hierarchy (`root`, the
     # sealed class the subject's own type belongs to, per
     # ClassSig.sealed_root) via a plain class-name pattern, or is a
-    # wildcard. Unlike check_match's own union case, this subset doesn't
-    # attempt real exhaustiveness here (enumerating every one of a
-    # sealed hierarchy's own concrete subclasses would mean walking
-    # `self.classes` for every member of `root`, and self-host/
-    # ast.lucid's own hierarchies run to dozens of subclasses) -- a
-    # trailing `case _:` is required instead, the shape every actual use
-    # in self-host/parser.lucid takes (exactly one concrete-class arm
-    # plus a wildcard, three times, no exceptions).
+    # wildcard. A trailing `case _:` is still always accepted (every
+    # actual use in self-host/parser.lucid takes this shape -- exactly
+    # one concrete-class arm plus a wildcard, three times, no
+    # exceptions) but is no longer *required*: self-host/interpreter.
+    # lucid's own `values_structurally_equal`/`value_is_truthy` match
+    # every one of `Value`'s own concrete subclasses by name, with no
+    # wildcard at all (a real exhaustiveness check, the same shape
+    # check_match's own union case already had) -- a small, fixed
+    # hierarchy (nine `Value` subclasses), unlike self-host/ast.lucid's
+    # own, which run to dozens; real exhaustiveness here is still just
+    # "every sibling sharing `root` has its own arm", the same
+    # `sealed_siblings` walk codegen.lucid's own class_tag already does,
+    # not a general algorithm.
     def check_sealed_match(self, m: MatchStmt, root: str, known: dict[str, LType], expected_return: LType | none, in_function: bool, in_loop: bool):
         has_wildcard = false
+        covered_names: list[str] = []
         for arm in m.arms:
             match arm.guard as g:
                 case Expr:
@@ -947,6 +990,7 @@ class Checker:
                                 case ClassSig:
                                     if narrow_cls.sealed_root == root:
                                         narrowed = nt
+                                        covered_names.append(nt.name)
                                     else:
                                         self.error("pattern type " + type_name(nt) + " is not part of the same sealed class hierarchy as '" + root + "'", arm.span)
                                 case none:
@@ -982,7 +1026,17 @@ class Checker:
                     pass
             self.check_block(arm.body, arm_known, expected_return, in_function, in_loop)
         if not has_wildcard:
-            self.error("match on a sealed class hierarchy requires a trailing 'case _:' in this subset (exhaustively listing every concrete subclass isn't supported)", m.span)
+            for sib in sealed_siblings(self.classes, root):
+                # `sealed_siblings` includes `root` itself (a sealed
+                # class's own `sealed_root` is its own name, the same
+                # reason `class_tag` reserves a tag value nothing ever
+                # actually uses) -- excluded here since nothing in this
+                # subset ever constructs a bare sealed base directly, so
+                # a value statically typed `root` is always dynamically
+                # one of its own concrete subclasses, never `root` itself.
+                if sib != root:
+                    if not str_in_list(covered_names, sib):
+                        self.error("match on '" + root + "' is not exhaustive: no case for '" + sib + "'", m.span)
 
     # codegen.lucid compiles a condition straight to a C `if`/`while`
     # condition, and C accepts any scalar there -- so an unchecked
@@ -1299,8 +1353,37 @@ class Checker:
     # single early return, and nothing in this subset ever needs more
     # than that (self-host/lexer.lucid's own `?` sites are all a plain
     # `Token | LexError`/`list[Token] | LexError`).
+    #
+    # `prop.expr` itself gets the same hoist-then-check treatment
+    # check_rhs_expr's own `case _:` branch already gives a plain
+    # assignment/return/expression-statement RHS -- needed for a `?`
+    # whose own operand is a Call/Construct argument or Binary operand
+    # that itself has a nested `?` one level deeper (self-host/
+    # interpreter.lucid's own dominant shape: `left = reject_propagated(
+    # self.eval_expr(env, result.left)?, result.span, "a binary
+    # operator")?`, an OUTER `?` around a Call whose own argument has an
+    # INNER `?`). Before this, `check_rhs_expr`'s `case Propagate:`
+    # branch went straight to `check_propagate`, which checked
+    # `prop.expr` with plain `check_expr` -- never hoisting its own
+    # nested Propagate, so `check_expr` eventually reached it directly
+    # and reported the generic "'?' is only supported as..." error.
+    # Recursing into `check_propagate` for the *inner* `?` (rather than
+    # just `check_expr`-ing its unwrapped replacement) means a
+    # triple-nested `?` would work too, though nothing in this subset
+    # needs that.
     def check_propagate(self, prop: Propagate, known: dict[str, LType], expected_return: LType | none) -> LType | none:
-        inner = self.check_expr(prop.expr, known)
+        inner: LType | none = none
+        inner_temp = "__lucid_hoist_" + str(prop.expr.span.line) + "_" + str(prop.expr.span.column)
+        match hoist_propagate(prop.expr, Ident(prop.expr.span, inner_temp)) as ih:
+            case Hoisted:
+                match self.check_propagate(ih.prop, known, expected_return) as inner_ok:
+                    case LType:
+                        known[inner_temp] = inner_ok
+                        inner = self.check_expr(ih.replaced, known)
+                    case none:
+                        return none
+            case none:
+                inner = self.check_expr(prop.expr, known)
         match inner as it:
             case UnionLType:
                 ok_types: list[LType] = []
@@ -1317,7 +1400,7 @@ class Checker:
                 if len(err_types) != 1:
                     self.error("'?' requires a union type with exactly one error variant (a class whose name ends in 'Error') in this subset", prop.span)
                     return none
-                if len(ok_types) != 1:
+                if len(ok_types) == 0:
                     self.error("'?' requires exactly one non-error member in this subset", prop.span)
                     return none
                 match expected_return as rt:
@@ -1327,7 +1410,21 @@ class Checker:
                                 self.error("'?' propagates " + type_name(e) + ", but the enclosing function's return type (" + type_name(rt) + ") doesn't include it", prop.span)
                     case none:
                         self.error("'?' used outside a function", prop.span)
-                return ok_types[0]
+                # `self.call_builtin(func_name, values, result.span)?`
+                # (self-host/interpreter.lucid's own `eval_expr`'s Call
+                # case) propagates away a single error member from a
+                # union with *more than one* non-error member
+                # (`Value | none | EvalError`), unlike every other `?`
+                # site in this subset so far (always exactly one of
+                # each) -- the unwrapped ok value is a real union
+                # (`Value | none`) here, not a single concrete type. A
+                # union of one member would just be that member's own
+                # type, so this still returns the same plain type
+                # ok_types[0] already did for the len(ok_types) == 1
+                # case.
+                if len(ok_types) == 1:
+                    return ok_types[0]
+                return UnionLType(ok_types)
             case LType:
                 self.error("'?' is only supported on a union return type in this subset", prop.span)
                 return none
@@ -1451,7 +1548,7 @@ class Checker:
             self.error("operator " + op + " is only supported with a set[T] right operand in this subset", span)
             return none
         if op == "EQ" or op == "NOT_EQ":
-            if types_equal(left, right) and (types_equal(left, IntType()) or types_equal(left, BoolType()) or types_equal(left, StrType())):
+            if types_equal(left, right) and (types_equal(left, IntType()) or types_equal(left, BoolType()) or types_equal(left, StrType()) or types_equal(left, FloatType())):
                 return BoolType()
             # `self.classes.get(cd.name, none) != none` (`checker.lucid`'s
             # own dominant "is this optional value present" shape, once
@@ -1506,11 +1603,43 @@ class Checker:
                 return BoolType()
             if types_equal(left, StrType()) and types_equal(right, StrType()):
                 return BoolType()
-            self.error("operator " + op + " requires two int or two str operands, got " + type_name(left) + " and " + type_name(right), span)
+            if types_equal(left, FloatType()) and types_equal(right, FloatType()):
+                return BoolType()
+            self.error("operator " + op + " requires two int, two str, or two float operands, got " + type_name(left) + " and " + type_name(right), span)
             return none
         if op == "ADD" and types_equal(left, StrType()) and types_equal(right, StrType()):
             return StrType()
-        if op == "ADD" or op == "SUB" or op == "MUL" or op == "FLOOR_DIV" or op == "MOD":
+        if op == "ADD" or op == "SUB" or op == "MUL":
+            if types_equal(left, IntType()) and types_equal(right, IntType()):
+                return IntType()
+            if types_equal(left, FloatType()) and types_equal(right, FloatType()):
+                return FloatType()
+            self.error("operator " + op + " requires two int or two float operands, got " + type_name(left) + " and " + type_name(right), span)
+            return none
+        if op == "FLOOR_DIV" or op == "MOD":
+            if types_equal(left, IntType()) and types_equal(right, IntType()):
+                return IntType()
+            self.error("operator " + op + " requires two int operands, got " + type_name(left) + " and " + type_name(right), span)
+            return none
+        # `/` (true division) -- self-host/interpreter.lucid's own
+        # `eval_binary` (`FloatValue(l.value / r.value)` for two ints,
+        # `FloatValue(l.value / r.value)` for two floats) -- always
+        # `float`, matching compiler/crates/lucid-checker's own rule,
+        # narrowed to exactly the two operand-type pairs actually used
+        # here (an int/float mix isn't, so isn't supported).
+        if op == "DIV":
+            if types_equal(left, IntType()) and types_equal(right, IntType()):
+                return FloatType()
+            if types_equal(left, FloatType()) and types_equal(right, FloatType()):
+                return FloatType()
+            self.error("operator " + op + " requires two int or two float operands, got " + type_name(left) + " and " + type_name(right), span)
+            return none
+        # `**` -- self-host/interpreter.lucid's own `eval_binary`
+        # (`IntValue(l.value ** r.value)`), always `int` here since
+        # neither operand is ever a float in this subset's one use
+        # (compiler/crates/lucid-checker's own rule promotes to `float`
+        # if either operand is, not needed here).
+        if op == "POW":
             if types_equal(left, IntType()) and types_equal(right, IntType()):
                 return IntType()
             self.error("operator " + op + " requires two int operands, got " + type_name(left) + " and " + type_name(right), span)
@@ -1691,47 +1820,66 @@ class Checker:
                                 return IntType()
                             case ListType:
                                 return IntType()
-                            case _:
-                                pass
-                    if any_unknown:
-                        return none
-                    self.error("len() supports only a single str or list[T] argument in this subset", call.span)
-                    return none
-                # `int(tok.text)`/`float(tok.text)` -- self-host/
-                # parser.lucid's own two numeric-literal conversions
-                # (`IntLit(int(tok.text))`, `FloatLit(float(tok.text))`)
-                # -- a str-to-number conversion, never on anything but a
-                # str argument in this subset.
-                if callee.name == "int":
-                    if len(arg_types) == 1:
-                        match arg_types[0] as at2:
-                            case StrType:
+                            case DictType:
+                                # `len(result.entries)` -- self-host/
+                                # interpreter.lucid's own
+                                # `value_is_truthy` (`DictValue`'s own
+                                # entry count) -- verified directly
+                                # against the reference interpreter.
                                 return IntType()
                             case _:
                                 pass
                     if any_unknown:
                         return none
-                    self.error("int() supports only a single str argument in this subset", call.span)
+                    self.error("len() supports only a single str, list[T], or dict[str, T] argument in this subset", call.span)
                     return none
+                # `int(tok.text)`/`float(tok.text)` -- self-host/
+                # parser.lucid's own two numeric-literal conversions
+                # (`IntLit(int(tok.text))`, `FloatLit(float(tok.text))`)
+                # -- a str-to-number conversion. `int()` also accepts a
+                # float argument (self-host/interpreter.lucid's own
+                # `int(result.value)` on a `FloatValue`, truncating
+                # toward zero, verified against the reference
+                # interpreter: `int(3.7) == 3`, `int(-3.7) == -3`).
+                if callee.name == "int":
+                    if len(arg_types) == 1:
+                        match arg_types[0] as at2:
+                            case StrType:
+                                return IntType()
+                            case FloatType:
+                                return IntType()
+                            case _:
+                                pass
+                    if any_unknown:
+                        return none
+                    self.error("int() supports only a single str or float argument in this subset", call.span)
+                    return none
+                # `float()` also accepts an int argument (self-host/
+                # interpreter.lucid's own `float(result.value)` on an
+                # `IntValue`, a plain widening conversion).
                 if callee.name == "float":
                     if len(arg_types) == 1:
                         match arg_types[0] as at3:
                             case StrType:
                                 return FloatType()
+                            case IntType:
+                                return FloatType()
                             case _:
                                 pass
                     if any_unknown:
                         return none
-                    self.error("float() supports only a single str argument in this subset", call.span)
+                    self.error("float() supports only a single str or int argument in this subset", call.span)
                     return none
                 # `str(n)` -- the other direction, a number-to-str
                 # conversion (`checker.lucid`'s/`codegen.lucid`'s own
                 # dominant use: `str(expr.span.line)`, `str(err_index)`,
                 # `str(lit.value)` for a FloatLit's own `value: float`)
-                # -- never on anything but an int or a float in this
-                # subset (a class/bool/list/dict argument has no builtin
-                # str() conversion here; a str argument is already a
-                # str).
+                # -- also accepts a bool argument (self-host/interpreter.
+                # lucid's own `value_to_str`'s `BoolValue` case,
+                # `str(result.value)`), formatted the same "true"/"false"
+                # way `print()` already formats one; a class/list/dict
+                # argument still has no builtin str() conversion here (a
+                # str argument is already a str).
                 if callee.name == "str":
                     if len(arg_types) == 1:
                         match arg_types[0] as at3b:
@@ -1739,11 +1887,13 @@ class Checker:
                                 return StrType()
                             case FloatType:
                                 return StrType()
+                            case BoolType:
+                                return StrType()
                             case _:
                                 pass
                     if any_unknown:
                         return none
-                    self.error("str() supports only a single int or float argument in this subset", call.span)
+                    self.error("str() supports only a single int, float, or bool argument in this subset", call.span)
                     return none
                 # `sorted(names)` -- types.lucid's/checker.lucid's own
                 # dominant use (`sorted_member_names`, `class_tag`),
@@ -1993,6 +2143,12 @@ def copy_type_scope(scope: dict[str, LType]) -> dict[str, LType]:
 def type_in_list(types: list[LType], t: LType) -> bool:
     for x in types:
         if types_equal(x, t):
+            return true
+    return false
+
+def str_in_list(items: list[str], target: str) -> bool:
+    for x in items:
+        if x == target:
             return true
     return false
 

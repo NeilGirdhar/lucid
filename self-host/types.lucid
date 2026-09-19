@@ -483,20 +483,28 @@ def field_type(cls: ClassSig, name: str) -> LType | none:
 # this after confirming that); returns 0 if `name` is somehow missing
 # from `classes` or has no `sealed_root`, which should never happen for
 # a program that passed checking.
+# Every class name sharing `root` as its own `sealed_root`, unsorted
+# (`class_tag` below sorts its own copy for a stable tag order;
+# `checker.lucid`'s own `check_sealed_match` uses the unsorted list
+# directly, since it only needs to check membership, not assign an
+# index).
+def sealed_siblings(classes: dict[str, ClassSig], root: str) -> list[str]:
+    siblings: list[str] = []
+    for cname in classes:
+        match classes.get(cname, none) as sibling:
+            case ClassSig:
+                if sibling.sealed_root == root:
+                    siblings.append(cname)
+            case none:
+                pass
+    return siblings
+
 def class_tag(classes: dict[str, ClassSig], name: str) -> int:
     match classes.get(name, none) as cls:
         case ClassSig:
             match cls.sealed_root as root:
                 case str:
-                    siblings: list[str] = []
-                    for cname in classes:
-                        match classes.get(cname, none) as sibling:
-                            case ClassSig:
-                                if sibling.sealed_root == root:
-                                    siblings.append(cname)
-                            case none:
-                                pass
-                    ordered = sorted(siblings)
+                    ordered = sorted(sealed_siblings(classes, root))
                     i = 0
                     while i < len(ordered):
                         if ordered[i] == name:

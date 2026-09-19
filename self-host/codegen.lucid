@@ -49,7 +49,7 @@
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, SetExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, FloatLit, Propagate, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, FunctionDef, Param, FromImport, Hoisted, hoist_propagate
 from .types import LType, IntType, BoolType, StrType, FloatType, ClassType, ListType, DictType, SetType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, resolve_all_declarations, inherited_fields, class_assignable_to, is_subclass_of, class_tag, union_has_none_member, union_member_type_equal
 
-runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}\n\n// str(n)/str(f) -- self-host/checker.lucid's/self-host/codegen.lucid's\n// own dominant `str()` use (`str(expr.span.line)`, `str(err_index)`,\n// `str(lit.value)` for a FloatLit's own float field), the other\n// direction from int(...)/float(...). \"%g\" for a float matches the\n// reference interpreter's own str(3.0) == \"3\" (no trailing \".0\") --\n// the same format print() already uses for a float value.\nstatic const char *lucid_rt_str_of_int(long n) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%ld\", n);\n    return result;\n}\n\nstatic const char *lucid_rt_str_of_float(double f) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%g\", f);\n    return result;\n}\n\n// s.endswith(suffix) -- checker.lucid's/codegen.lucid's own dominant\n// `?`-error-recognition heuristic (`mt.name.endswith(\"Error\")`).\nstatic long lucid_rt_str_endswith(const char *s, const char *suffix) {\n    long ls = (long) strlen(s);\n    long lsuf = (long) strlen(suffix);\n    if (lsuf > ls) {\n        return 0;\n    }\n    return strcmp(s + (ls - lsuf), suffix) == 0;\n}\n\n// s.replace(old, new) -- codegen.lucid's own C-string-escaping helper\n// chains several of these calls together; verified directly against\n// the reference interpreter: replaces every occurrence, like Python's\n// str.replace(old, new) with no count limit. Never called with an\n// empty old argument in this subset.\nstatic const char *lucid_rt_str_replace(const char *s, const char *old, const char *repl) {\n    long old_len = (long) strlen(old);\n    long repl_len = (long) strlen(repl);\n    long count = 0;\n    const char *p = s;\n    while (1) {\n        const char *found = strstr(p, old);\n        if (!found) {\n            break;\n        }\n        count++;\n        p = found + old_len;\n    }\n    long result_len = (long) strlen(s) + count * (repl_len - old_len);\n    char *result = malloc((size_t) result_len + 1);\n    char *out = result;\n    p = s;\n    while (1) {\n        const char *found = strstr(p, old);\n        if (!found) {\n            strcpy(out, p);\n            break;\n        }\n        long prefix_len = (long) (found - p);\n        memcpy(out, p, (size_t) prefix_len);\n        out += prefix_len;\n        memcpy(out, repl, (size_t) repl_len);\n        out += repl_len;\n        p = found + old_len;\n    }\n    return result;\n}"
+runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}\n\n// str(n)/str(f) -- self-host/checker.lucid's/self-host/codegen.lucid's\n// own dominant `str()` use (`str(expr.span.line)`, `str(err_index)`,\n// `str(lit.value)` for a FloatLit's own float field), the other\n// direction from int(...)/float(...).\nstatic const char *lucid_rt_str_of_int(long n) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%ld\", n);\n    return result;\n}\n\n// The reference interpreter's own str(f)/print(f) formats a float as\n// Rust's f64 Display does: the *shortest* plain-decimal (never\n// scientific notation, unlike \"%g\") representation that round-trips\n// back to the exact same double (str(3.0) == \"3\", but str(3.5 / 1.5)\n// == \"2.3333333333333335\", not \"2.33333\" -- a fixed \"%g\" precision\n// (this subset's first draft used a bare \"%g\", 6 significant digits by\n// default) silently truncated any value that didn't happen to round-\n// trip in 6 digits, a real, previously-undiscovered miscompile caught\n// only by self-host/interpreter.lucid's own float division needing\n// more precision than any earlier compile_demo_programs/*.lucid file's\n// float arithmetic happened to exercise; \"%.*g\" specifically (tried\n// first) was then rejected too -- it round-trips correctly but picks\n// scientific notation at low precision, \"1e+02\" for 100.0 instead of\n// \"100\", diverging from Rust's Display, which never emits scientific\n// notation at all). Tries increasing decimal places from 0 up to 17\n// (enough for any f64) and stops at the first one whose own strtod\n// parses back to the exact same bits -- the standard technique for\n// shortest-round-trip formatting without a full Grisu/Ryu\n// implementation, verified directly against the reference interpreter\n// for several values including a non-terminating decimal\n// (2.3333333333333335), a sum with a rounding artifact (0.1 + 0.2 ==\n// 0.30000000000000004), and a whole number (100.0 == \"100\").\nstatic const char *lucid_rt_str_of_float(double f) {\n    char *result = malloc(64);\n    int prec = 0;\n    while (prec <= 17) {\n        snprintf(result, 64, \"%.*f\", prec, f);\n        if (strtod(result, NULL) == f) {\n            break;\n        }\n        prec++;\n    }\n    return result;\n}\n\n// s.endswith(suffix) -- checker.lucid's/codegen.lucid's own dominant\n// `?`-error-recognition heuristic (`mt.name.endswith(\"Error\")`).\nstatic long lucid_rt_str_endswith(const char *s, const char *suffix) {\n    long ls = (long) strlen(s);\n    long lsuf = (long) strlen(suffix);\n    if (lsuf > ls) {\n        return 0;\n    }\n    return strcmp(s + (ls - lsuf), suffix) == 0;\n}\n\n// s.replace(old, new) -- codegen.lucid's own C-string-escaping helper\n// chains several of these calls together; verified directly against\n// the reference interpreter: replaces every occurrence, like Python's\n// str.replace(old, new) with no count limit. Never called with an\n// empty old argument in this subset.\nstatic const char *lucid_rt_str_replace(const char *s, const char *old, const char *repl) {\n    long old_len = (long) strlen(old);\n    long repl_len = (long) strlen(repl);\n    long count = 0;\n    const char *p = s;\n    while (1) {\n        const char *found = strstr(p, old);\n        if (!found) {\n            break;\n        }\n        count++;\n        p = found + old_len;\n    }\n    long result_len = (long) strlen(s) + count * (repl_len - old_len);\n    char *result = malloc((size_t) result_len + 1);\n    char *out = result;\n    p = s;\n    while (1) {\n        const char *found = strstr(p, old);\n        if (!found) {\n            strcpy(out, p);\n            break;\n        }\n        long prefix_len = (long) (found - p);\n        memcpy(out, p, (size_t) prefix_len);\n        out += prefix_len;\n        memcpy(out, repl, (size_t) repl_len);\n        out += repl_len;\n        p = found + old_len;\n    }\n    return result;\n}\n\n// a ** b -- self-host/interpreter.lucid's own `l.value ** r.value`\n// (always two ints, see checker.lucid's own POW comment); C has no\n// power operator. Plain repeated multiplication -- exponentiation by\n// squaring would be faster but nothing in this subset needs a large\n// exponent. Verified directly against the reference interpreter for\n// b == 0 (1, including 0 ** 0) and a handful of positive exponents; a\n// negative exponent is never produced by anything this subset actually\n// compiles (the reference interpreter's own int ** negative-int isn't a\n// sensible int either -- see self-host/README.md's Design notes).\nstatic long lucid_rt_ipow(long a, long b) {\n    long result = 1;\n    long i = 0;\n    while (i < b) {\n        result *= a;\n        i++;\n    }\n    return result;\n}"
 
 # `sorted(names)` -- types.lucid's/checker.lucid's own dominant use
 # (`sorted_member_names`, `class_tag`), sorting a *fresh copy* of a
@@ -227,6 +227,7 @@ def emit_list_type(element_type: LType) -> str:
     parts.append("static " + name + " *" + name + "_new(void) {\n    " + name + " *lst = malloc(sizeof(" + name + "));\n    lst->items = NULL;\n    lst->len = 0;\n    lst->cap = 0;\n    return lst;\n}")
     parts.append("static void " + name + "_append(" + name + " *lst, " + ctype + " value) {\n    if (lst->len >= lst->cap) {\n        lst->cap = (lst->cap == 0) ? 4 : lst->cap * 2;\n        lst->items = realloc(lst->items, sizeof(" + ctype + ") * lst->cap);\n    }\n    lst->items[lst->len] = value;\n    lst->len = lst->len + 1;\n}")
     parts.append("static " + ctype + " " + name + "_get(" + name + " *lst, long i) {\n    long idx = i;\n    if (idx < 0) {\n        idx += lst->len;\n    }\n    if (idx < 0 || idx >= lst->len) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    return lst->items[idx];\n}")
+    parts.append("static void " + name + "_set(" + name + " *lst, long i, " + ctype + " value) {\n    long idx = i;\n    if (idx < 0) {\n        idx += lst->len;\n    }\n    if (idx < 0 || idx >= lst->len) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    lst->items[idx] = value;\n}")
     parts.append("static " + name + " *" + name + "_of(long n, " + ctype + " *src) {\n    " + name + " *lst = " + name + "_new();\n    long i = 0;\n    while (i < n) {\n        " + name + "_append(lst, src[i]);\n        i = i + 1;\n    }\n    return lst;\n}")
     parts.append("static " + ctype + " " + name + "_pop(" + name + " *lst) {\n    if (lst->len == 0) {\n        fprintf(stderr, \"Runtime Error: pop from an empty list\\n\");\n        exit(1);\n    }\n    lst->len = lst->len - 1;\n    return lst->items[lst->len];\n}")
     return join_with(parts, "\n\n")
@@ -734,6 +735,24 @@ class Codegen:
                                     return StrType()
                                 case _:
                                     pass
+                        case FloatType:
+                            return FloatType()
+                        case _:
+                            pass
+                    return IntType()
+                # `/` (true division) is always float, matching
+                # check_binary's own DIV rule (int/int or float/float,
+                # never mixed in this subset). `+`/`-`/`*` on two floats
+                # (self-host/interpreter.lucid's own `eval_binary`)
+                # return float too; every other arithmetic op
+                # (`FLOOR_DIV`/`MOD`/`POW`, and `+`/`-`/`*` on two ints)
+                # returns int, the existing fallback below.
+                if result.op == "DIV":
+                    return FloatType()
+                if result.op == "SUB" or result.op == "MUL":
+                    match left_type as lt2:
+                        case FloatType:
+                            return FloatType()
                         case _:
                             pass
                 return IntType()
@@ -964,8 +983,15 @@ class Codegen:
                                 ok_types.append(mt)
                         case _:
                             ok_types.append(mt)
+                # `self.call_builtin(func_name, values, result.span)?`
+                # (self-host/interpreter.lucid's own dominant match-
+                # subject `?` shape) -- see check_propagate's own header
+                # comment in checker.lucid for why more than one ok type
+                # is a real union here, not an error.
                 if len(ok_types) == 1:
                     return ok_types[0]
+                if len(ok_types) > 1:
+                    return UnionLType(ok_types)
                 return none
             case _:
                 return none
@@ -1196,6 +1222,21 @@ class Codegen:
                     return "lucid_rt_floordiv(" + left_code + ", " + right_code + ")"
                 if result.op == "MOD":
                     return "lucid_rt_mod(" + left_code + ", " + right_code + ")"
+                # `/` (true division) -- always float, so both operands
+                # are cast to `double` explicitly: plain C `/` on two
+                # `long` operands would be C's own truncating integer
+                # division instead (self-host/interpreter.lucid's own
+                # `l.value / r.value` for two ints needs `2.333...`, not
+                # `2`). A no-op cast when both operands are already
+                # `double` (the float/float case).
+                if result.op == "DIV":
+                    return "((double) (" + left_code + ") / (double) (" + right_code + "))"
+                # `**` -- self-host/interpreter.lucid's own `l.value **
+                # r.value` (always two ints here, see check_binary's own
+                # POW comment) -- C has no power operator, so this goes
+                # through a small runtime helper instead.
+                if result.op == "POW":
+                    return "lucid_rt_ipow(" + left_code + ", " + right_code + ")"
                 return "(" + left_code + " " + c_binary_op(result.op) + " " + right_code + ")"
             case Unary:
                 inner = self.codegen_expr(result.expr, known)
@@ -1452,6 +1493,8 @@ class Codegen:
                             match self.infer_expr_type(result.args[0].value, known) as at:
                                 case ListType:
                                     return "(" + arg_codes[0] + "->len)"
+                                case DictType:
+                                    return "(" + arg_codes[0] + "->len)"
                                 case _:
                                     return "((long) strlen(" + arg_codes[0] + "))"
                         # `int(tok.text)`/`float(tok.text)` -- str-to-
@@ -1459,19 +1502,46 @@ class Codegen:
                         # functions this subset's own runtime prelude
                         # doesn't need to define itself, since <stdlib.h>
                         # is already included for malloc/realloc.
+                        # `int(...)` -- a str argument goes through
+                        # `atol`; a float argument (self-host/
+                        # interpreter.lucid's own `int(result.value)` on
+                        # a `FloatValue`) truncates toward zero, matching
+                        # both the reference interpreter (`int(3.7) ==
+                        # 3`, `int(-3.7) == -3`) and C's own int-from-
+                        # double cast semantics exactly, so a plain cast
+                        # is enough -- no runtime helper needed.
                         if callee.name == "int" and len(result.args) == 1:
-                            return "(atol(" + arg_codes[0] + "))"
+                            match self.infer_expr_type(result.args[0].value, known) as int_arg_t:
+                                case FloatType:
+                                    return "((long) (" + arg_codes[0] + "))"
+                                case _:
+                                    return "(atol(" + arg_codes[0] + "))"
+                        # `float(...)` -- a str argument goes through
+                        # `strtod`; an int argument (self-host/
+                        # interpreter.lucid's own `float(result.value)`
+                        # on an `IntValue`) is a plain widening cast.
                         if callee.name == "float" and len(result.args) == 1:
-                            return "(strtod(" + arg_codes[0] + ", NULL))"
+                            match self.infer_expr_type(result.args[0].value, known) as float_arg_t:
+                                case IntType:
+                                    return "((double) (" + arg_codes[0] + "))"
+                                case _:
+                                    return "(strtod(" + arg_codes[0] + ", NULL))"
                         # `str(n)` -- the other direction, a number-to-
                         # str conversion (checker.lucid's/codegen.lucid's
                         # own dominant use); dispatches on the argument's
                         # own static type since C has no single runtime
-                        # helper polymorphic over int/double.
+                        # helper polymorphic over int/double/bool. A bool
+                        # argument (self-host/interpreter.lucid's own
+                        # `value_to_str`'s `BoolValue` case) reuses the
+                        # exact same ternary codegen_print's own bool
+                        # formatting already uses, needing no separate
+                        # runtime helper.
                         if callee.name == "str" and len(result.args) == 1:
                             match self.infer_expr_type(result.args[0].value, known) as st:
                                 case FloatType:
                                     return "lucid_rt_str_of_float(" + arg_codes[0] + ")"
+                                case BoolType:
+                                    return "(" + arg_codes[0] + " ? \"true\" : \"false\")"
                                 case _:
                                     return "lucid_rt_str_of_int(" + arg_codes[0] + ")"
                         # `sorted(names)` -- a fresh, ascending-sorted
@@ -1995,8 +2065,12 @@ class Codegen:
                         # matching `lucid_dict_str_<V>_set` call
                         # (checker.lucid's own check_stmt Assignment arm
                         # only accepts this when the receiver is a
-                        # dict[str, T] in the first place).
-                        dict_receiver_code = self.codegen_expr(target.value, known)
+                        # dict[str, T] or a list[T] in the first place).
+                        # `r.items[i.value] = v` (self-host/interpreter.
+                        # lucid's own `exec_assignment`) is the matching
+                        # `lucid_list_<T>_set` call -- bounds-checked,
+                        # negative-index-aware, mirroring `_get`.
+                        index_receiver_code = self.codegen_expr(target.value, known)
                         key_code = self.codegen_expr(target.index, known)
                         match self.infer_expr_type(target.value, known) as dict_rt:
                             case DictType:
@@ -2006,7 +2080,15 @@ class Codegen:
                                         value_code = cast_if_needed(dict_rt.value_type, dict_vt, value_code)
                                     case none:
                                         pass
-                                return prelude + indent + dict_name + "_set(" + dict_receiver_code + ", " + key_code + ", " + value_code + ");"
+                                return prelude + indent + dict_name + "_set(" + index_receiver_code + ", " + key_code + ", " + value_code + ");"
+                            case ListType:
+                                list_name = "lucid_list_" + mangle_component(dict_rt.element_type)
+                                match self.infer_expr_type(rhs_expr, known) as list_vt:
+                                    case LType:
+                                        value_code = cast_if_needed(dict_rt.element_type, list_vt, value_code)
+                                    case none:
+                                        pass
+                                return prelude + indent + list_name + "_set(" + index_receiver_code + ", " + key_code + ", " + value_code + ");"
                             case _:
                                 return prelude + indent + "/* unsupported index assignment */;"
                     case _:
@@ -2255,7 +2337,20 @@ class Codegen:
     # this subset requires exactly one error member, not "at least one"
     # the way compiler/crates/lucid-checker itself allows.
     def codegen_propagate_assignment(self, assign: Assignment, prop: Propagate, indent: str, known: dict[str, LType], expected_return: LType | none) -> str:
-        match self.infer_expr_type(prop.expr, known) as it:
+        outer_prelude = ""
+        resolved_expr = prop.expr
+        outer_temp = "__lucid_hoist_" + str(prop.expr.span.line) + "_" + str(prop.expr.span.column)
+        match hoist_propagate(prop.expr, Ident(prop.expr.span, outer_temp)) as oh:
+            case Hoisted:
+                match self.codegen_hoisted_prelude(oh.prop, outer_temp, indent, known, expected_return) as op:
+                    case str:
+                        outer_prelude = op + "\n"
+                        resolved_expr = oh.replaced
+                    case none:
+                        pass
+            case none:
+                pass
+        match self.infer_expr_type(resolved_expr, known) as it:
             case UnionLType:
                 ok_types: list[LType] = []
                 err_types: list[LType] = []
@@ -2273,7 +2368,7 @@ class Codegen:
                 ok_type = ok_types[0]
                 err_type = err_types[0]
                 temp = "__lucid_prop_" + str(prop.span.line) + "_" + str(prop.span.column)
-                inner_code = self.codegen_expr(prop.expr, known)
+                inner_code = self.codegen_expr(resolved_expr, known)
                 err_index = union_member_index(it.members, err_type)
                 ok_index = union_member_index(it.members, ok_type)
                 err_field = temp + ".v" + str(err_index)
@@ -2331,7 +2426,7 @@ class Codegen:
                     case _:
                         pass
                 unwrap = indent + name + " = " + wrapped_ok + ";"
-                return decl + "\n" + check + "\n" + unwrap
+                return outer_prelude + decl + "\n" + check + "\n" + unwrap
             case _:
                 return indent + "/* unsupported '?' */"
 
@@ -2396,7 +2491,20 @@ class Codegen:
         return decl + "\n" + indent + join_with(branches, " else ")
 
     def codegen_propagate_return(self, prop: Propagate, indent: str, known: dict[str, LType], expected_return: LType | none) -> str:
-        match self.infer_expr_type(prop.expr, known) as it:
+        outer_prelude2 = ""
+        resolved_expr2 = prop.expr
+        outer_temp2 = "__lucid_hoist_" + str(prop.expr.span.line) + "_" + str(prop.expr.span.column)
+        match hoist_propagate(prop.expr, Ident(prop.expr.span, outer_temp2)) as oh2:
+            case Hoisted:
+                match self.codegen_hoisted_prelude(oh2.prop, outer_temp2, indent, known, expected_return) as op2:
+                    case str:
+                        outer_prelude2 = op2 + "\n"
+                        resolved_expr2 = oh2.replaced
+                    case none:
+                        pass
+            case none:
+                pass
+        match self.infer_expr_type(resolved_expr2, known) as it:
             case UnionLType:
                 ok_types: list[LType] = []
                 err_types: list[LType] = []
@@ -2414,7 +2522,7 @@ class Codegen:
                 ok_type = ok_types[0]
                 err_type = err_types[0]
                 temp = "__lucid_prop_" + str(prop.span.line) + "_" + str(prop.span.column)
-                inner_code = self.codegen_expr(prop.expr, known)
+                inner_code = self.codegen_expr(resolved_expr2, known)
                 err_index = union_member_index(it.members, err_type)
                 ok_index = union_member_index(it.members, ok_type)
                 err_field = temp + ".v" + str(err_index)
@@ -2453,7 +2561,7 @@ class Codegen:
                 decl = indent + union_ctype + " " + temp + " = " + inner_code + ";"
                 check = indent + "if (" + temp + ".tag == " + str(err_index) + ") {\n" + indent + "    return " + wrapped_err + ";\n" + indent + "}"
                 final_return = indent + "return " + wrapped_ok + ";"
-                return decl + "\n" + check + "\n" + final_return
+                return outer_prelude2 + decl + "\n" + check + "\n" + final_return
             case _:
                 return indent + "/* unsupported '?' */"
 
@@ -2467,7 +2575,20 @@ class Codegen:
     # nowhere for it to go here, so it's simply never read out of the
     # temp at all.
     def codegen_propagate_exprstmt(self, prop: Propagate, indent: str, known: dict[str, LType], expected_return: LType | none) -> str:
-        match self.infer_expr_type(prop.expr, known) as it:
+        outer_prelude3 = ""
+        resolved_expr3 = prop.expr
+        outer_temp3 = "__lucid_hoist_" + str(prop.expr.span.line) + "_" + str(prop.expr.span.column)
+        match hoist_propagate(prop.expr, Ident(prop.expr.span, outer_temp3)) as oh3:
+            case Hoisted:
+                match self.codegen_hoisted_prelude(oh3.prop, outer_temp3, indent, known, expected_return) as op3:
+                    case str:
+                        outer_prelude3 = op3 + "\n"
+                        resolved_expr3 = oh3.replaced
+                    case none:
+                        pass
+            case none:
+                pass
+        match self.infer_expr_type(resolved_expr3, known) as it:
             case UnionLType:
                 ok_types: list[LType] = []
                 err_types: list[LType] = []
@@ -2484,7 +2605,7 @@ class Codegen:
                     return indent + "/* unsupported '?' */"
                 err_type = err_types[0]
                 temp = "__lucid_prop_" + str(prop.span.line) + "_" + str(prop.span.column)
-                inner_code = self.codegen_expr(prop.expr, known)
+                inner_code = self.codegen_expr(resolved_expr3, known)
                 err_index = union_member_index(it.members, err_type)
                 err_field = temp + ".v" + str(err_index)
                 wrapped_err = err_field
@@ -2496,7 +2617,7 @@ class Codegen:
                 union_ctype = union_c_name(it.members)
                 decl = indent + union_ctype + " " + temp + " = " + inner_code + ";"
                 check = indent + "if (" + temp + ".tag == " + str(err_index) + ") {\n" + indent + "    return " + wrapped_err + ";\n" + indent + "}"
-                return decl + "\n" + check
+                return outer_prelude3 + decl + "\n" + check
             case _:
                 return indent + "/* unsupported '?' */"
 
@@ -2515,8 +2636,40 @@ class Codegen:
     # exactly like any other expression: `ok_var` reads back as a plain
     # `Ident`, needing no special case anywhere in codegen_expr, since a
     # C variable's name already matches its Lucid name.
+    # `prop.expr` itself gets the same recursive resolution
+    # check_propagate's checker.lucid counterpart now gets (see its own
+    # comment) -- needed for a *triple*-nested '?', not just double:
+    # `validate(reject(inner(n)?, "expr")?)?` is an exprstmt-level `?`
+    # around `validate(...)`, whose own single argument is itself a
+    # Propagate (`reject(...)?`), whose own argument is a *third* nested
+    # Propagate (`inner(n)?`) -- self-host/interpreter.lucid's own
+    # `call_method`/`eval_expr` shapes chain `reject_propagated(...)?`
+    # around a call whose own argument already has a `?`. Without this,
+    # the recursive call below (into this same function, for the
+    # *middle* Propagate `hoist_propagate` finds one level into
+    # `prop.expr`) would itself call plain `codegen_expr` on the
+    # *innermost* Propagate still nested inside its own `prop.expr`,
+    # which `codegen_expr` has no case for at all -- a real, previously-
+    # undiscovered miscompile (not a rejection: checker.lucid's own
+    # recursive check_propagate fix already accepts this program, so
+    # codegen has to actually get it right, not just avoid crashing)
+    # caught by comparing the compiled binary's output against `lucid
+    # run` on the exact same source, not by any checker-side error.
     def codegen_hoisted_prelude(self, prop: Propagate, ok_var: str, indent: str, known: dict[str, LType], expected_return: LType | none) -> str | none:
-        match self.infer_expr_type(prop.expr, known) as it:
+        inner_prelude4 = ""
+        resolved_expr4 = prop.expr
+        inner_temp4 = "__lucid_hoist_" + str(prop.expr.span.line) + "_" + str(prop.expr.span.column)
+        match hoist_propagate(prop.expr, Ident(prop.expr.span, inner_temp4)) as ih4:
+            case Hoisted:
+                match self.codegen_hoisted_prelude(ih4.prop, inner_temp4, indent, known, expected_return) as ip4:
+                    case str:
+                        inner_prelude4 = ip4 + "\n"
+                        resolved_expr4 = ih4.replaced
+                    case none:
+                        pass
+            case none:
+                pass
+        match self.infer_expr_type(resolved_expr4, known) as it:
             case UnionLType:
                 ok_types: list[LType] = []
                 err_types: list[LType] = []
@@ -2529,14 +2682,12 @@ class Codegen:
                                 ok_types.append(mt)
                         case _:
                             ok_types.append(mt)
-                if len(ok_types) != 1 or len(err_types) != 1:
+                if len(ok_types) == 0 or len(err_types) != 1:
                     return none
-                ok_type = ok_types[0]
                 err_type = err_types[0]
                 temp = "__lucid_prop_" + str(prop.span.line) + "_" + str(prop.span.column)
-                inner_code = self.codegen_expr(prop.expr, known)
+                inner_code = self.codegen_expr(resolved_expr4, known)
                 err_index = union_member_index(it.members, err_type)
-                ok_index = union_member_index(it.members, ok_type)
                 err_field = temp + ".v" + str(err_index)
                 wrapped_err = err_field
                 match expected_return as rt:
@@ -2547,9 +2698,39 @@ class Codegen:
                 union_ctype = union_c_name(it.members)
                 decl = indent + union_ctype + " " + temp + " = " + inner_code + ";"
                 check = indent + "if (" + temp + ".tag == " + str(err_index) + ") {\n" + indent + "    return " + wrapped_err + ";\n" + indent + "}"
-                ok_decl = indent + c_type_of(ok_type) + " " + ok_var + " = " + temp + ".v" + str(ok_index) + ";"
-                known[ok_var] = ok_type
-                return decl + "\n" + check + "\n" + ok_decl
+                if len(ok_types) == 1:
+                    ok_type = ok_types[0]
+                    ok_index = union_member_index(it.members, ok_type)
+                    ok_decl = indent + c_type_of(ok_type) + " " + ok_var + " = " + temp + ".v" + str(ok_index) + ";"
+                    known[ok_var] = ok_type
+                    return inner_prelude4 + decl + "\n" + check + "\n" + ok_decl
+                # `self.call_builtin(func_name, values, result.span)?`
+                # (self-host/interpreter.lucid's own `eval_expr`) --
+                # more than one non-error member (`Value | none`, once
+                # `EvalError` is propagated away) means the unwrapped ok
+                # value is itself a real, narrower union, not a single
+                # concrete type. Re-tags each ok member from the wide
+                # union's own tag into the narrower ok-only union's own
+                # tag/field layout -- the same re-wrap
+                # codegen_union_narrowing_return already does for a
+                # narrower `return`, except assigning into `ok_var`
+                # instead of returning. No final `else` after the
+                # if/else-if chain (`ok_var` is declared, not
+                # initialized) -- the error check just above already
+                # excluded every tag but an ok one, the same reasoning
+                # codegen_sealed_match's own if/else-if chain relies on
+                # for a fully-covered sealed match with no wildcard.
+                narrow_ctype = union_c_name(ok_types)
+                ok_var_decl = indent + narrow_ctype + " " + ok_var + ";"
+                narrow_branches: list[str] = []
+                for m in ok_types:
+                    field_idx = union_member_index(it.members, m)
+                    field_code = temp + ".v" + str(field_idx)
+                    wrapped = wrap_union_value(ok_types, m, field_code)
+                    narrow_branches.append("if (" + temp + ".tag == " + str(field_idx) + ") {\n" + indent + "    " + ok_var + " = " + wrapped + ";\n" + indent + "}")
+                narrow_assign = indent + join_with(narrow_branches, " else ")
+                known[ok_var] = UnionLType(ok_types)
+                return inner_prelude4 + decl + "\n" + check + "\n" + ok_var_decl + "\n" + narrow_assign
             case _:
                 return none
 
@@ -2571,8 +2752,29 @@ class Codegen:
     # exactly this reason -- the alias never becomes an ordinary hoisted
     # local at all).
     def codegen_match(self, m: MatchStmt, indent: str, known: dict[str, LType], broken_flag: str | none, expected_return: LType | none) -> str:
-        subject_code = self.codegen_expr(m.subject, known)
-        match self.infer_expr_type(m.subject, known) as st:
+        # `match self.call_builtin(func_name, values, result.span)? as
+        # builtin_result:` (self-host/interpreter.lucid's own
+        # `eval_expr`) -- a `?` directly as the match subject, resolved
+        # into its own ok-value temp first via codegen_hoisted_prelude
+        # (the same helper an assignment/return/exprstmt RHS with a
+        # nested `?` already uses), then matched exactly like any other
+        # expression subject -- an `Ident` with a known type, needing no
+        # special case below.
+        match_prelude = ""
+        subject_expr = m.subject
+        match m.subject as msub:
+            case Propagate:
+                match_ok_var = "__lucid_hoist_" + str(msub.expr.span.line) + "_" + str(msub.expr.span.column)
+                match self.codegen_hoisted_prelude(msub, match_ok_var, indent, known, expected_return) as mp:
+                    case str:
+                        match_prelude = mp + "\n"
+                        subject_expr = Ident(msub.span, match_ok_var)
+                    case none:
+                        pass
+            case _:
+                pass
+        subject_code = self.codegen_expr(subject_expr, known)
+        match self.infer_expr_type(subject_expr, known) as st:
             case UnionLType:
                 temp = "__lucid_match_" + str(m.span.line) + "_" + str(m.span.column)
                 decl = indent + union_c_name(st.members) + " " + temp + " = " + subject_code + ";"
@@ -2586,13 +2788,13 @@ class Codegen:
                 # arm match doesn't end up with indent re-inserted after
                 # every "else " the way naively indenting each arm on
                 # its own would.
-                return decl + "\n" + indent + join_with(branches, " else ")
+                return match_prelude + decl + "\n" + indent + join_with(branches, " else ")
             case ClassType:
                 match self.classes.get(st.name, none) as cls:
                     case ClassSig:
                         match cls.sealed_root as root:
                             case str:
-                                return self.codegen_sealed_match(m, root, subject_code, indent, known, broken_flag, expected_return)
+                                return match_prelude + self.codegen_sealed_match(m, root, subject_code, indent, known, broken_flag, expected_return)
                             case none:
                                 return indent + "/* unsupported match subject */"
                     case none:
@@ -3280,7 +3482,17 @@ class Codegen:
     # statements (all reachable from `all_decls`, the same statement
     # list codegen_module already has on hand), recursing the same way
     # collect_local_names does.
-    def collect_var_union_types(self, stmts: list[Stmt], found: list[UnionLType]):
+    # `known` is threaded through purely to resolve a match subject
+    # that's itself a `?` on a method call (`self.call_builtin(...)?`,
+    # self-host/interpreter.lucid's own dominant match-subject-`?`
+    # shape) back to its own registered return type -- only
+    # `known["self"]` actually matters for that (infer_expr_type's own
+    # Call-Attribute case only needs the receiver's class to look up the
+    # method signature, never any argument's own type), so this doesn't
+    # need the full local-variable seeding codegen_body's own
+    # infer_local_types pre-pass builds -- an empty dict at module scope,
+    # `{"self": ClassType(cls.name)}` inside a method body.
+    def collect_var_union_types(self, stmts: list[Stmt], found: list[UnionLType], known: dict[str, LType]):
         for s in stmts:
             match s as result:
                 case VarDef:
@@ -3291,40 +3503,81 @@ class Codegen:
                         case _:
                             pass
                 case FunctionStmt:
-                    self.collect_var_union_types(result.function.body, found)
+                    fn_known: dict[str, LType] = copy_type_scope(known)
+                    for p in result.function.params:
+                        match resolve_type_expr(p.type_annotation) as pt:
+                            case LType:
+                                fn_known[p.name] = pt
+                            case none:
+                                pass
+                    self.collect_var_union_types(result.function.body, found, fn_known)
                 case ClassDef:
+                    base_method_known: dict[str, LType] = copy_type_scope(known)
+                    base_method_known["self"] = ClassType(result.name)
                     for member in result.body:
                         match member as m:
                             case MethodMember:
-                                self.collect_var_union_types(m.method.body, found)
+                                method_known: dict[str, LType] = copy_type_scope(base_method_known)
+                                mi = 1
+                                while mi < len(m.method.params):
+                                    mp = m.method.params[mi]
+                                    match resolve_type_expr(mp.type_annotation) as mpt:
+                                        case LType:
+                                            method_known[mp.name] = mpt
+                                        case none:
+                                            pass
+                                    mi = mi + 1
+                                self.collect_var_union_types(m.method.body, found, method_known)
                             case _:
                                 pass
                 case If:
-                    self.collect_var_union_types(result.then_branch, found)
+                    self.collect_var_union_types(result.then_branch, found, known)
                     for branch in result.elif_branches:
-                        self.collect_var_union_types(branch.body, found)
+                        self.collect_var_union_types(branch.body, found, known)
                     match result.else_branch as else_body:
                         case list[Stmt]:
-                            self.collect_var_union_types(else_body, found)
+                            self.collect_var_union_types(else_body, found, known)
                         case none:
                             pass
                 case While:
-                    self.collect_var_union_types(result.body, found)
+                    self.collect_var_union_types(result.body, found, known)
                     match result.if_broken_body as broken_body:
                         case list[Stmt]:
-                            self.collect_var_union_types(broken_body, found)
+                            self.collect_var_union_types(broken_body, found, known)
                         case none:
                             pass
                 case For:
-                    self.collect_var_union_types(result.body, found)
+                    self.collect_var_union_types(result.body, found, known)
                     match result.if_broken_body as broken_body:
                         case list[Stmt]:
-                            self.collect_var_union_types(broken_body, found)
+                            self.collect_var_union_types(broken_body, found, known)
                         case none:
                             pass
                 case MatchStmt:
+                    # `match self.call_builtin(...)? as builtin_result:`
+                    # -- a `?` directly as the match subject synthesizes
+                    # its own narrower ok-only union (see
+                    # check_propagate's own header comment in
+                    # checker.lucid) whenever the underlying union has
+                    # more than one non-error member -- a union that
+                    # exists nowhere in any registered signature or
+                    # field, so collect_union_types' own scan can't find
+                    # it either; this is the third and last place a
+                    # union type can originate that isn't already
+                    # covered (see this method's own header comment for
+                    # the second, a local's declared type).
+                    match result.subject as msub3:
+                        case Propagate:
+                            match self.infer_propagate_ok_type(msub3, known) as ok_t:
+                                case UnionLType:
+                                    if not union_already_found(found, ok_t):
+                                        found.append(ok_t)
+                                case _:
+                                    pass
+                        case _:
+                            pass
                     for arm in result.arms:
-                        self.collect_var_union_types(arm.body, found)
+                        self.collect_var_union_types(arm.body, found, known)
                 case _:
                     pass
 
@@ -3631,7 +3884,7 @@ class Codegen:
         # registered from an import, say). Sorted by name, same
         # reproducibility reason as the module-level globals below.
         all_union_types = self.collect_union_types()
-        self.collect_var_union_types(all_decls, all_union_types)
+        self.collect_var_union_types(all_decls, all_union_types, copy_type_scope(self.module_scope))
         # `d.get(key, none)` on any `dict[str, V]` (checker.lucid's own
         # dominant `.get()` shape once dict[str, V].get() started
         # returning `V | none` for a `none` default -- see check_call's

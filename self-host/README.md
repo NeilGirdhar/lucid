@@ -21,11 +21,13 @@ own output exactly: Lucid, compiling Lucid, to a native binary — for the
 subset covered so far, not yet for the whole language. None of the five
 pieces is close to feature parity with its Rust counterpart.
 
-**`self-host/lexer.lucid`, `self-host/parser.lucid`, `self-host/
-checker.lucid`, and `self-host/codegen.lucid` all now compile through
-this pipeline**: `checker.lucid` reports zero errors on each, and
+**All five self-hosted pieces — `self-host/lexer.lucid`, `self-host/
+parser.lucid`, `self-host/checker.lucid`, `self-host/codegen.lucid`,
+and `self-host/interpreter.lucid` — now compile through this
+pipeline**: `checker.lucid` reports zero errors on each, and
 `codegen.lucid`'s generated C for each compiles cleanly with `gcc` —
-the actual bootstrap target, reached for
+the actual bootstrap target this whole directory has been working
+toward, reached for
 `lexer.lucid` after closing the gaps union return types, `match`
 narrowing, and `?` exposed (see the `checker.lucid`/`codegen.lucid`
 entries below, and the `union_types.lucid` compile-demo program, whose
@@ -66,8 +68,20 @@ round already added for a plain function call, extended to a
 method-call argument too (`self.codegen_body(fn.params, fn.body,
 known, {}, sig.return_type)`) — plus one real, previously-undiscovered
 bug found only once `codegen.lucid`'s own generated C reached `gcc`
-(see the `codegen.lucid` entry and Design notes below for all of
-these). None of the four is yet linked and run end-to-end as a
+(see the `codegen.lucid` entry and Design notes below); and, closing
+out the set, `interpreter.lucid` itself — real exhaustiveness for a
+sealed-class-hierarchy `match` with no trailing wildcard (a small,
+fixed hierarchy, unlike `self-host/ast.lucid`'s own dozens-of-
+subclasses ones), `?` nested two and three levels deep (not just
+one), `?` directly as a `match` statement's own subject (surfacing a
+real bug in the reference interpreter itself along the way — see
+Design notes), full float arithmetic/comparison, `/` (always float)
+and `**` (always int in this subset), `list[T]` index assignment,
+`str(bool)`/`int(float)`/`float(int)`, and `len()` on a
+`dict[str, T]` — plus two more real, previously-undiscovered bugs
+(see the `interpreter.lucid` entry and Design notes below).
+
+None of the five is yet linked and run end-to-end as a
 working compiled piece (that needs a caller — a compiled `codegen.
 lucid`, or a small hand-written driver — to actually invoke `tokenize`/
 `parse`/`check_program` and check the output against the reference
@@ -76,8 +90,15 @@ compiled program in this pipeline already gets); `self-host/
 _probe_selfcompile.lucid` (untracked, a standing local gauge, not
 committed) re-runs the `lexer.lucid` half of this check on demand.
 
-**Next target: `self-host/interpreter.lucid`**, probed the same way —
-the last of the five pieces.
+**Next**: link the five compiled pieces into an actual standalone
+native `lucid` binary — a compiled `lexer`/`parser`/`checker`/`codegen`
+calling each other directly, with `interpreter.lucid` as the
+tree-walking fallback for whatever subset never reaches `codegen.
+lucid`'s own coverage — the step this whole directory has been
+building toward, not yet attempted. Short of that, each piece closing
+more of the gap with its own Rust counterpart (traits, dispatch,
+generics, comprehensions, and everything else each piece's own header
+comment still lists) remains real, ongoing work.
 
 - `lexer.lucid` — a lexer, tokenizing Lucid source into the same token
   kinds `compiler/crates/lucid-syntax/src/lexer.rs` produces. Runs under
@@ -137,6 +158,112 @@ the last of the five pieces.
   arithmetic/comparison/logical operators, `print`/`len`/`str`/`int`/
   `float`, and `list.append`/`.pop`/`dict.get`) is enough to run real,
   substantial programs — including `lexer.lucid` itself.
+
+  Compiling `interpreter.lucid` itself all the way through this
+  pipeline — the fifth and final piece — needed a much smaller round of
+  new checker.lucid/codegen.lucid gaps than `checker.lucid`'s own round
+  did, closer in size to `codegen.lucid`'s own (`interpreter.lucid` is
+  908 lines, well under half `checker.lucid`'s size): real
+  exhaustiveness for a sealed-class-hierarchy `match` with no trailing
+  wildcard (`values_structurally_equal`/`value_is_truthy`, matching
+  every one of `Value`'s nine concrete subclasses by name) — a small,
+  fixed hierarchy, unlike `self-host/ast.lucid`'s own dozens-of-
+  subclasses ones, so real exhaustiveness (walking every class sharing
+  the subject's own `sealed_root`, the same `sealed_siblings` helper
+  `class_tag` already builds internally, now pulled out and shared)
+  was worth adding instead of requiring a wildcard here too; `?` nested
+  two and three levels deep, not just one (`left = reject_propagated(
+  self.eval_expr(env, result.left)?, result.span, "a binary
+  operator")?` — an *outer* `?` around a `Call` whose own argument has
+  an *inner* `?` — and `validate(reject(inner(n)?, "expr")?)?`,
+  three deep) — `check_propagate`/`codegen_hoisted_prelude` both now
+  recurse into their own `prop.expr` the same hoist-then-check way
+  `check_rhs_expr`'s own `case _:` branch already did, instead of
+  plain-`check_expr`/`codegen_expr`-ing it directly; `?` directly as a
+  `match` statement's own subject (`match self.call_builtin(func_name,
+  values, result.span)? as builtin_result:`), a fourth position
+  alongside the direct right-hand side of a plain assignment/return
+  statement/bare expression statement — needing `check_propagate`
+  itself to return a *real* union (not an error) when the underlying
+  union has more than one non-error member (`Value | none | EvalError`
+  propagating away `EvalError` leaves `Value | none`, not a single
+  concrete type), and a new synthesized-union-type collector
+  (`collect_var_union_types`'s own `MatchStmt` case, now threading a
+  `known: dict[str, LType]` scope through the whole walk so a
+  method-call subject like this one can resolve `self`'s own type) so
+  `lucid_union_Value_none`'s own struct actually gets emitted, not just
+  referenced; full float arithmetic (`+`/`-`/`*` on two floats, plus
+  `<`/`<=`/`>`/`>=`/`==`/`!=`) and comparisons, verified directly
+  against the reference interpreter operand by operand; `/` (true
+  division, always `float`, `(int, int)` or `(float, float)` in this
+  subset, cast to `double` explicitly since C's own `/` on two `long`
+  operands truncates); `**` (always `int` here, since `interpreter.
+  lucid`'s one use is never on a float — a new `lucid_rt_ipow` runtime
+  helper, plain repeated multiplication, verified against the reference
+  interpreter for `0 ** 0` and a handful of positive exponents); `list[T]`
+  index assignment (`r.items[i.value] = v`, mutating an *existing*
+  index in place, unlike `.append()`; a new `lucid_list_T_set`
+  mirroring `_get`'s own bounds check, negative indices included);
+  `str(bool)` (reusing `codegen_print`'s own `"true"`/`"false"`
+  ternary, no new runtime helper), `int(float)` (a plain truncating-
+  toward-zero cast, matching the reference interpreter's own
+  `int(3.7) == 3`, `int(-3.7) == -3`, and C's own int-from-double cast
+  semantics exactly), and `float(int)` (a plain widening cast); and
+  `len()` on a `dict[str, T]` (`result.entries`'s own `->len` field,
+  the same shape `list[T]`'s own `len()` already used).
+
+  Two real, previously-undiscovered bugs surfaced only once
+  `interpreter.lucid`'s own generated C reached `gcc`, not by any of
+  the features above:
+  - **A plain `int` loop counter named `i` collided with an unrelated
+    match alias also named `i`, in the same function of `interpreter.
+    lucid` itself.** `interpreter.lucid`'s own `eval_expr`
+    binds `match idx as i:` three times (`case Index:`, reading
+    `xs[i]`/`s[i]`/`d[k]`) and `exec_stmt` binds it twice more (`case
+    Index:` on an assignment target, writing `xs[i] = v`/`d[k] = v`) —
+    each narrowing `i` to a `Value` subclass — while the *same*
+    enclosing function also uses a plain `int` loop counter named `i`
+    to walk a `Call`/`Construct`'s own argument list
+    (`lucid_list_Arg_get(result->args, i)`). This subset's local-
+    variable type inference is function-scoped, not block-scoped (the
+    same shape as the earlier `at`/`ctype` collisions in
+    `checker.lucid`/`codegen.lucid` themselves), so the single `i`
+    declaration in the generated C ended up typed `Value *`: `gcc`
+    caught it as `passing argument 2 of 'lucid_list_Arg_get' makes
+    integer from pointer without a cast`. Fixed the same way those
+    were: renamed the colliding alias (`i` → `iv`) in `interpreter.
+    lucid`'s own source at all five sites, rather than attempting real
+    block scoping.
+  - **`lucid_rt_str_of_float`'s own `"%g"` formatting silently
+    truncated any value that didn't happen to round-trip in 6
+    significant digits.** Every earlier `str(f)`/`print(f)` test just
+    happened to use a value like `3.0` that formats identically at any
+    precision, so this went unnoticed until `interpreter.lucid`'s own
+    float division (`3.5 / 1.5`) needed the reference interpreter's
+    actual `2.3333333333333335` — a Rust `f64::Display`-style
+    shortest-round-trip decimal, not a fixed-precision one, and never
+    scientific notation either (a first fix using `"%.*g"` with
+    increasing precision round-tripped correctly but picked scientific
+    notation at low precision — `"1e+02"` for `100.0` instead of
+    `"100"` — diverging from Rust's own `Display`, which never emits
+    one). Fixed with `"%.*f"` (fixed decimal places, not significant
+    digits) at increasing precision from 0 up to 17, stopping at the
+    first one whose own `strtod` parses back to the exact same double
+    — verified directly against the reference interpreter for several
+    values, including a non-terminating decimal, a classic
+    floating-point rounding artifact (`0.1 + 0.2 ==
+    0.30000000000000004`), and a whole number (`100.0 == "100"`).
+    Every earlier `compile_demo_programs/*.lucid` file re-verified
+    afterward to confirm the fix didn't change any *already-correct*
+    output.
+
+  Every feature and bug fix above was verified the usual way (a
+  from-scratch minimal reproduction, `gcc`-compiled, diffed
+  byte-for-byte against `lucid run`) — except the propagating path of
+  `?` as a `match` subject, which needed a hand-desugared reference
+  program instead (see the Design notes entry on the reference
+  interpreter's own bug in this exact shape) — before being folded into
+  `compile_demo_programs/interpreter_gaps.lucid`.
 - `interpreter_demo.lucid` — takes three small hand-written programs as
   plain-text Lucid source (a recursive `fib`; an iterative `factorial`
   over a list; a fourth program covering globals, `elif`/`else`,
@@ -1290,8 +1417,8 @@ the last of the five pieces.
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles nineteen hand-written programs —
-  eighteen real files under `self-host/compile_demo_programs/`, plus
+  `codegen.lucid`. Also compiles twenty hand-written programs —
+  nineteen real files under `self-host/compile_demo_programs/`, plus
   `imports_demo.lucid`, which lives directly under `self-host/` instead
   (see compile_demo.lucid's own header comment for why: its
   `from .lexer import ...` has to resolve to `self-host/lexer.lucid`
@@ -1400,6 +1527,18 @@ the last of the five pieces.
   the called method's own declared parameter type — the codegen.lucid
   feature set and real bug above, exercised together in the one
   program
+  — and `interpreter_gaps` — a sealed-hierarchy `match` with no
+  trailing wildcard covering every concrete subclass; full float
+  arithmetic/comparison; `/` and `**`; `list[T]` index assignment;
+  `str(bool)`/`int(float)`/`float(int)`; `len()` on a `dict[str, T]`;
+  and `?` directly as a `match` statement's own subject, on its two
+  differentially-verifiable success paths (see the Design notes entry
+  on the reference interpreter's own bug in this shape's propagating
+  path for why that third path isn't included here) — the
+  interpreter.lucid feature set and one of its two real bugs above
+  (the float-formatting one; the `i`/`iv` collision has no separate
+  surface to exercise, it was purely a codegen-internal miscompile),
+  exercised together in the one program
   — plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen
@@ -2024,3 +2163,48 @@ work rather than a rushed fix bundled in here:
   inheritance.lucid`'s own bare-statement `?` case *is* differentially
   tested on both paths. Not fixed in `lucid-runtime`, out of scope for
   this branch.
+- **A second, related bug in `compiler/crates/lucid-runtime`: `match
+  expr? as v: ...` mis-evaluates whenever `?` actually propagates —
+  same root cause as the `return expr?` bug above, different call
+  site.** Found the same way, verifying `interpreter.lucid`'s own
+  dominant match-subject-`?` shape (`match self.call_builtin(func_name,
+  values, result.span)? as builtin_result: ...`): `match maybe(x)? as
+  v: case V: ... case none: ...` ran correctly when `maybe` succeeded,
+  but for `n < 0` (the propagating case) silently fell through to a
+  `case _:` wildcard arm instead of returning the error from the
+  *enclosing* function the way the spec's own desugaring
+  (`docs/question-mark-operator.md`) says it should — or, with no
+  wildcard arm at all (this subset's own `check_sealed_match`/
+  `check_match` never require one when every concrete case, or every
+  union member, is already covered), crashed outright with `Runtime
+  Error: non-exhaustive match: unhandled value return ...`.
+  Root-caused by reading `Stmt::Match`'s own evaluation in
+  `lucid-runtime`: `let subj_val = self.eval_expr(subject)?;` uses
+  Rust's own `?` to propagate a *Rust*-level `RuntimeError`, but never
+  checks whether the successfully-returned `subj_val` is itself the
+  `Value::Return(...)` sentinel `Expr::Propagate`'s own evaluation
+  produces on the error path (see the bug above) — unlike `Stmt::
+  Return`'s own evaluator, which (correctly) never re-examines its
+  value at all, just wraps it. `self.matches_pattern(&arm.pattern,
+  &subj_val)` then tries to pattern-match the *wrapped* sentinel
+  against every arm's pattern, which of course matches nothing but a
+  wildcard, if one happens to be present. This subset's own
+  `codegen.lucid` doesn't share the bug: `codegen_match`'s own
+  Propagate-subject handling calls `codegen_hoisted_prelude`, whose
+  generated C is a plain temp/tag-check/early-`return` statement
+  sequence with no sentinel value possible, matching
+  `codegen_propagate_return`'s own reasoning for the first bug above.
+  Verified this compiles and runs *correctly* (all three paths — a
+  concrete ok value, `none`, and the error actually propagating)
+  despite the reference interpreter getting the last one wrong, using
+  the same workaround the first bug's entry describes: a hand-
+  desugared reference program (`match expr as outcome: case ErrorType:
+  return outcome; case _: match outcome as v: ...`, matching the
+  spec's own desugaring exactly) to get the *correct* expected output
+  for the propagating path, since `lucid run` on the actual `?`-as-
+  subject shape can't be trusted for it — `compile_demo_programs/
+  interpreter_gaps.lucid`'s own `?`-as-match-subject case is
+  deliberately exercised only on the success paths (a concrete value,
+  and `none`) for exactly this reason, the same restriction
+  `inheritance.lucid`'s own `?`-as-return-value case already has. Not
+  fixed in `lucid-runtime`, out of scope for this branch.

@@ -570,29 +570,29 @@ class Interpreter:
                 idx = reject_propagated(self.eval_expr(env, result.index)?, result.span, "an index")?
                 match receiver as r:
                     case ListValue:
-                        match idx as i:
+                        match idx as iv:
                             case IntValue:
-                                if i.value < 0 or i.value >= len(r.items):
+                                if iv.value < 0 or iv.value >= len(r.items):
                                     return EvalError("list index out of range", result.span)
-                                return r.items[i.value]
+                                return r.items[iv.value]
                             case _:
                                 return EvalError("list index must be an int", result.span)
                     case StrValue:
-                        match idx as i:
+                        match idx as iv:
                             case IntValue:
-                                if i.value < 0 or i.value >= len(r.value):
+                                if iv.value < 0 or iv.value >= len(r.value):
                                     return EvalError("string index out of range", result.span)
-                                return StrValue(r.value[i.value])
+                                return StrValue(r.value[iv.value])
                             case _:
                                 return EvalError("string index must be an int", result.span)
                     case DictValue:
-                        match idx as i:
+                        match idx as iv:
                             case StrValue:
-                                match r.entries.get(i.value, none) as dict_val:
+                                match r.entries.get(iv.value, none) as dict_val:
                                     case Value:
                                         return dict_val
                                     case none:
-                                        return EvalError("key not found: '" + i.value + "'", result.span)
+                                        return EvalError("key not found: '" + iv.value + "'", result.span)
                             case _:
                                 return EvalError("dict key must be a str", result.span)
                     case _:
@@ -768,18 +768,18 @@ class Interpreter:
                         idx = reject_propagated(self.eval_expr(env, target.index)?, result.span, "an assignment target")?
                         match receiver as r:
                             case ListValue:
-                                match idx as i:
+                                match idx as iv:
                                     case IntValue:
-                                        if i.value < 0 or i.value >= len(r.items):
+                                        if iv.value < 0 or iv.value >= len(r.items):
                                             return EvalError("list index out of range", result.span)
-                                        r.items[i.value] = v
+                                        r.items[iv.value] = v
                                         return NormalSignal()
                                     case _:
                                         return EvalError("list index must be an int", result.span)
                             case DictValue:
-                                match idx as i:
+                                match idx as iv:
                                     case StrValue:
-                                        r.entries[i.value] = v
+                                        r.entries[iv.value] = v
                                         return NormalSignal()
                                     case _:
                                         return EvalError("dict key must be a str", result.span)
