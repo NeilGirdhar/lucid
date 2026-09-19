@@ -772,7 +772,10 @@ class Parser:
             return WildcardPattern(start)
         if self.peek_kind() == "IDENT":
             name = self.peek().text
-            if len(name) > 0 and name[0] >= "A" and name[0] <= "Z":
+            is_type_name = len(name) > 0 and name[0] >= "A" and name[0] <= "Z"
+            if name == "list" or name == "dict" or name == "str" or name == "int" or name == "bool" or name == "float":
+                is_type_name = true
+            if is_type_name:
                 type_expr = self.parse_type_expr()?
                 if self.check("LPAREN"):
                     self.advance()

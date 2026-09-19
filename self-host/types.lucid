@@ -71,12 +71,25 @@ class ListType(LType):
 # `str` key here would diverge from what the reference interpreter
 # actually does with the same program. Reference semantics, same as
 # `list[T]` and for the same underlying reason (Rc<RefCell<_>>). `V` is
-# int/bool/str only, not a class -- narrower than `list[T]`'s own
-# element-type scope, since nothing in this subset needs a
-# class-valued dict yet and it would need its own per-class C emission
-# (`lucid_dict_str_<Class>`) the same way `list[T]` already has.
+# int/bool/str/float, a class, or list[T] -- checker.lucid's own
+# `known: dict[str, LType]`/`classes: dict[str, ClassSig]` and
+# types.lucid's own `FuncTable.signatures: dict[str, list[FuncSig]]`
+# need a class-valued and a list-valued dict respectively, the shape
+# self-host/checker.lucid itself needed once it started compiling
+# through this pipeline. Not `dict`/`none`/a union, still -- a
+# dict-of-dict or dict-of-union value has no real need here yet.
 class DictType(LType):
     value_type: LType
+
+# `set[str]` -- codegen.lucid's own dominant use (`names: set[str] = {}`,
+# tracking which local names are already hoisted; `seen: set[str]`,
+# types.lucid's own resolve_all_declarations, tracking which files are
+# already inlined), always a `str` element in practice, but resolved
+# generically like list[T]'s own element type -- narrower than a real
+# hash set (see emit_set_type's own note), just membership (`in`/
+# `not in`) and `.add(...)`, nothing else this subset needs yet.
+class SetType(LType):
+    element_type: LType
 
 # A union of two or more of the types above. Unlike NoneType, this
 # *does* have a real runtime representation (a tagged struct, see
@@ -126,6 +139,8 @@ def type_name(t: LType) -> str:
             return "list[" + type_name(result.element_type) + "]"
         case DictType:
             return "dict[str, " + type_name(result.value_type) + "]"
+        case SetType:
+            return "set[" + type_name(result.element_type) + "]"
         case NoneType:
             return "none"
         case UnionLType:
@@ -174,6 +189,8 @@ def mangle_component(t: LType) -> str:
             return "list_" + mangle_component(result.element_type)
         case DictType:
             return "dict_str_" + mangle_component(result.value_type)
+        case SetType:
+            return "set_" + mangle_component(result.element_type)
         case UnionLType:
             text = "union"
             for n in sorted_member_names(result.members):
@@ -226,6 +243,12 @@ def types_equal(a: LType, b: LType) -> bool:
                     return types_equal(left.value_type, right.value_type)
                 case _:
                     return false
+        case SetType:
+            match b as right:
+                case SetType:
+                    return types_equal(left.element_type, right.element_type)
+                case _:
+                    return false
         case NoneType:
             match b as right:
                 case NoneType:
@@ -272,6 +295,27 @@ def assignable_to(value_type: LType, expected: LType) -> bool:
         case _:
             return false
 
+# `self.classes.get(cd.name, none) != none` -- checker.lucid's own
+# dominant "is this optional value present" shape (check_binary's own
+# EQ/NOT_EQ case) needs to know whether a union has `none` as one of
+# its members at all, distinct from union_member_index's own "which
+# position" (whose 0-fallback is ambiguous with a real index 0 here).
+def union_has_none_member(u: UnionLType) -> bool:
+    for m in u.members:
+        if types_equal(m, NoneType()):
+            return true
+    return false
+
+# `sibling.sealed_root == root` (`types.lucid`'s own class_tag,
+# `sealed_root: str | none` compared against a plain `str`) --
+# generalizes union_has_none_member to any exact member type, not just
+# `none` specifically.
+def union_member_type_equal(u: UnionLType, t: LType) -> bool:
+    for m in u.members:
+        if types_equal(m, t):
+            return true
+    return false
+
 def type_list_equal(a: list[LType], b: list[LType]) -> bool:
     if len(a) != len(b):
         return false
@@ -309,6 +353,12 @@ def resolve_type_expr(t: TypeExpr | none) -> LType | none:
                         return ListType(et)
                     case none:
                         return none
+            if result.name == "set" and len(result.args) == 1:
+                match resolve_type_expr(result.args[0]) as set_et:
+                    case StrType:
+                        return SetType(set_et)
+                    case _:
+                        return none
             if result.name == "dict" and len(result.args) == 2:
                 match result.args[0] as key_type_expr:
                     case NamedType:
@@ -317,13 +367,9 @@ def resolve_type_expr(t: TypeExpr | none) -> LType | none:
                     case _:
                         return none
                 match resolve_type_expr(result.args[1]) as vt:
-                    case ListType:
-                        return none
                     case DictType:
                         return none
                     case NoneType:
-                        return none
-                    case ClassType:
                         return none
                     case UnionLType:
                         return none

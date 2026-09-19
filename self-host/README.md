@@ -21,37 +21,54 @@ own output exactly: Lucid, compiling Lucid, to a native binary — for the
 subset covered so far, not yet for the whole language. None of the five
 pieces is close to feature parity with its Rust counterpart.
 
-**`self-host/lexer.lucid` and `self-host/parser.lucid` both now compile
-through this pipeline**: `checker.lucid` reports zero errors on each,
-and `codegen.lucid`'s generated C for each compiles cleanly with `gcc`
-— the actual bootstrap target, reached for `lexer.lucid` after closing
-the gaps union return types, `match` narrowing, and `?` exposed (see
-the `checker.lucid`/`codegen.lucid` entries below, and the
-`union_types.lucid` compile-demo program, whose shapes were chosen
-specifically to mirror `lexer.lucid`'s own), and for `parser.lucid`
-after closing every gap listed in the previous revision of this
-section (cross-file imports, class inheritance, union-typed fields, `?`
-in three positions, sealed-hierarchy matching, subtype-aware calls,
-union return-type subsets) plus five more this branch found by
-compiling `parser.lucid` itself all the way through and reading every
-resulting `gcc` error, not just the checker's own: `?` hoisted out of a
-`Call`/`Construct` argument or a `Binary` operand (see the
-`checker.lucid`/`codegen.lucid` entries below), `int(...)`/`float(...)`
-conversion builtins and a `FloatType` primitive (`ast.lucid`'s own
-`FloatLit`/`ComplexLit` fields, never before supported), a Lucid local
-whose name collides with a C reserved word (`default`), a `VarDef`
-initialized with a subtype `Construct` into a declared sealed-base
-type, and a union type used only as a local variable's own declared
-type (neither a return type nor a field). Neither is yet linked and run
-end-to-end as a working compiled lexer/parser (that needs a caller — a
-compiled `checker.lucid`, or a small hand-written driver — to actually
-invoke `tokenize`/`parse` and check the output against the reference
+**`self-host/lexer.lucid`, `self-host/parser.lucid`, and `self-host/
+checker.lucid` all now compile through this pipeline**: `checker.lucid`
+reports zero errors on each, and `codegen.lucid`'s generated C for each
+compiles cleanly with `gcc` — the actual bootstrap target, reached for
+`lexer.lucid` after closing the gaps union return types, `match`
+narrowing, and `?` exposed (see the `checker.lucid`/`codegen.lucid`
+entries below, and the `union_types.lucid` compile-demo program, whose
+shapes were chosen specifically to mirror `lexer.lucid`'s own), for
+`parser.lucid` after closing cross-file imports, class inheritance,
+union-typed fields, `?` in three positions, sealed-hierarchy matching,
+subtype-aware calls, union return-type subsets, `?` hoisted out of a
+`Call`/`Construct` argument or a `Binary` operand, `int(...)`/
+`float(...)` conversion builtins and a `FloatType` primitive, a Lucid
+local colliding with a C reserved word, a `VarDef` initialized with a
+subtype `Construct` into a declared sealed-base type, and a union type
+used only as a local variable's own declared type — and, in this
+branch, for `checker.lucid` itself, the largest single gap this project
+has closed so far: `dict[str, V]` restricted to `V` in `int`/`bool`/
+`str` (checker.lucid's own `known: dict[str, LType]`/`classes: dict[str,
+ClassSig]` need a class-valued dict; `FuncTable.signatures: dict[str,
+list[FuncSig]]` needs a list-valued one), no dict item assignment or
+direct index read (only `.get()`), `dict[str, V].get(key, none)` always
+returning `V` rather than `V | none`, no union-typed function/method
+parameter at all, no way to match a union whose own member is itself a
+sealed class hierarchy by that member's concrete subclasses (`types.
+lucid`'s own `LType | none`, matched by `case ClassType:`/`case
+ListType:`/...), a sealed-match wildcard arm never binding its own
+alias, `case str:`/`case int:`/`case bool:`/`case float:` never
+recognized as type patterns, no `str(n)`/`str.endswith(...)`/
+`sorted(...)` builtins, no `set[T]` at all, `for` never supported over
+a dict's own keys, a `set[T]`, or an arbitrary (non-`range`) call's own
+return value, an empty list/dict/set literal never inferring its
+element/value type from a plain function call's own matching parameter
+(only a `VarDef`/`Construct` argument got this), and — found only once
+`checker.lucid`'s own generated C reached `gcc`, past a clean checker
+pass — five more real, previously-undiscovered bugs (see the
+`checker.lucid`/`codegen.lucid` entries and Design notes below for all
+of these). None of the three is yet linked and run end-to-end as a
+working compiled piece (that needs a caller — a compiled `codegen.
+lucid`, or a small hand-written driver — to actually invoke `tokenize`/
+`parse`/`check_program` and check the output against the reference
 interpreter's own, the same differential discipline every other
 compiled program in this pipeline already gets); `self-host/
 _probe_selfcompile.lucid` (untracked, a standing local gauge, not
 committed) re-runs the `lexer.lucid` half of this check on demand.
 
-**Next target: `self-host/checker.lucid`**, probed the same way.
+**Next target: `self-host/codegen.lucid`**, probed the same way, then
+`self-host/interpreter.lucid`.
 
 - `lexer.lucid` — a lexer, tokenizing Lucid source into the same token
   kinds `compiler/crates/lucid-syntax/src/lexer.rs` produces. Runs under
@@ -563,6 +580,78 @@ committed) re-runs the `lexer.lucid` half of this check on demand.
   reached checking `float(tok.text)` as a Construct argument); there's no
   float arithmetic, comparison, or dispatch overload anywhere in this
   subset, since nothing self-hosted needs one yet.
+
+  Compiling `checker.lucid` itself all the way through this pipeline —
+  the largest single round of work in this project so far — closed a
+  long list of gaps `checker.lucid`'s own source needed, none related
+  to `parser.lucid`'s own remaining scope:
+  `dict[str, V]` no longer restricts `V` to `int`/`bool`/`str` — a
+  class or a `list[T]` value type is resolved the same generic way
+  (`resolve_type_expr`), needed the moment `checker.lucid`'s own
+  `classes: dict[str, ClassSig]`/`known: dict[str, LType]` and
+  `types.lucid`'s own `FuncTable.signatures: dict[str, list[FuncSig]]`
+  had to type-check. A dict can now be *mutated*: `check_stmt`'s
+  Assignment arm gained a `case Index:` for `d[key] = value` (checked
+  against `class_assignable_to`, matching `known[name] = t`'s own
+  dominant shape), and `check_expr`'s own Index case gained a matching
+  `case DictType:` for a direct read (`copied[key] = scope[key]`,
+  distinct from `.get()`: the key is guaranteed present, so this reads
+  the value type directly, not `V | none`). `dict[str, V].get(key,
+  none)` (a `none` default, not a same-typed one) now returns `V |
+  none` instead of requiring an exact-type default — the "is this
+  optional value present" shape `checker.lucid` leans on constantly.
+  A function/method parameter can be union-typed now (`expected_return:
+  LType | none`) — `method_signature_for`/`collect_function_signature`
+  simply stopped special-casing `UnionLType` as unsupported, letting it
+  fall through to the same `case LType:` every other resolved type
+  already takes.
+  `check_match`'s own union-arm narrowing check switched from
+  `assignable_to` to `class_assignable_to`, so a pattern naming a
+  *concrete subclass* of one of the union's own sealed members narrows
+  correctly — `types.lucid`'s own `LType | none`, matched by `case
+  ClassType:`/`case ListType:`/`case DictType:`/... (each a concrete
+  `LType` subclass), not by `LType` itself. A sealed-hierarchy match's
+  own wildcard arm (`case _:`) now binds its own alias too, to the
+  sealed root's own (un-narrowed) type — previously it never bound at
+  all, unnoticed because none of `parser.lucid`'s own three
+  sealed-match wildcard arms happened to read theirs, but `checker.
+  lucid`'s own `check_propagate`/`check_construct` both do (`case _:
+  ok_types.append(mt)`).
+  `parse_pattern` (in `parser.lucid`, exercised transitively by every
+  file it parses) now recognizes `case str:`/`case int:`/`case bool:`/
+  `case float:` as type patterns too, not just an uppercase-starting
+  class name — the same gap `case list:`/`case dict:` closed earlier
+  for `parser.lucid`'s own needs.
+  `str(n)`/`str(f)` (the reverse of `int(...)`/`float(...)`), `str.
+  endswith(suffix)` (`checker.lucid`'s/`codegen.lucid`'s own dominant
+  `?`-error-recognition heuristic, `mt.name.endswith("Error")`, never
+  itself type-checked before), and `sorted(names)` (`list[str] ->
+  list[str]`, a fresh ascending-sorted copy, verified directly that the
+  original is untouched) are all new recognized builtins.
+  `set[str]` is a real type now — declaration, an empty `{}` literal
+  (mirroring `list`/`dict`'s own empty-literal handling), `.add(...)`,
+  and `in`/`not in` (`check_binary` gained an `IN`/`NOT_IN` case,
+  requiring a `set[T]` right operand) — `codegen.lucid`'s own
+  `collect_local_names`/`param_names` tracking is exactly this shape.
+  `for` now supports iterating a `dict[str, V]`'s own keys (always
+  `str`), a `set[T]`, and — the fix with the widest blast radius,
+  since it was previously narrowed to `range(...)` specifically — *any*
+  function call whose own return type is a `list[T]`/`set[T]`/
+  `dict[str, V]` (`for n in sorted_member_names(result.members):`,
+  `types.lucid`'s own `mangle_component`).
+  An empty list/dict/set literal passed as a plain function *call*
+  argument (not just a `VarDef`/`Construct` argument, which already had
+  this) now infers its own element/value type from the callee's
+  matching parameter — `resolve_all_declarations(stmts, {})`'s own
+  `seen: set[str]` parameter, checked by peeking at the callee's first
+  registered signature ahead of checking each argument.
+  `x != none`/`x == none` for a union that includes `none` as a member
+  (`self.classes.get(cd.name, none) != none`) is now checked, and
+  generalized to `x == plain_value` for a union whose own member type
+  matches `plain_value`'s exact type (`sibling.sealed_root == root`,
+  `sealed_root: str | none` compared against a plain `str`) — both via
+  a new shared `union_member_type_equal`/`union_has_none_member` in
+  `types.lucid`.
 - `checker_demo.lucid` — runs `checker.lucid` against clean programs
   (plain functions; classes with `dispatch def` operator overloading)
   and one program for each kind of error it catches, printing what it
@@ -1032,14 +1121,103 @@ committed) re-runs the `lexer.lucid` half of this check on demand.
   run` on the same source) before being folded into
   `compile_demo_programs/parser_gaps.lucid`, the one program in this
   branch that exercises the whole set together.
+
+  Compiling `checker.lucid` itself needed matching codegen for every
+  checker-side feature above, plus its own share of real bugs, found
+  the same way parser.lucid's own compile was closed out: get the
+  checker pass clean, then keep re-`gcc`-compiling the result and
+  fixing whatever it finds, since codegen never re-checks anything the
+  checker already approved and can miscompile a shape the checker
+  correctly accepts.
+  `emit_dict_type` gained `_new`/`_set` (a growable, `realloc`-doubled
+  buffer exactly like `lucid_list_T`'s own `_new`/`_append`, overwriting
+  an existing key's value in place or appending a new pair) and
+  `_index` (a direct `d[key]` read, `exit(1)`-ing on a missing key
+  rather than taking a default value); `_of` itself now builds through
+  `_new`+`_set` in a loop instead of aliasing the caller's own array
+  directly, since that array could never be safely `realloc`'d by a
+  later `_set` call. `codegen_stmt`'s Assignment arm gained a matching
+  `case Index:`, and `codegen_expr`'s own Index case a matching `case
+  DictType:`. `dict[str, V].get(key, none)`'s own C return type is `V |
+  none`'s tagged struct now, not a bare `ctype` — built at the call
+  site itself (`_get`'s own signature doesn't change) via a ternary on
+  `_get(..., NULL) != NULL`, `_get` called twice since it's a pure
+  lookup and this subset has no GNU statement expressions to evaluate
+  it once. A union-typed parameter gets the same wrap/cast a
+  `Construct`/`Return`/Attribute-assignment argument already does,
+  through a new shared `cast_or_wrap` (subsumes the older
+  `cast_if_needed` for the non-union case). A sealed-hierarchy match
+  arm whose narrowed type isn't literally one of the subject union's
+  own members (`case ClassType:` on `LType | none`) now finds the
+  *actual* member via `find_union_member` for the tag check and field
+  read, then downcasts to the narrower pattern type — sound only
+  because the tag check just confirmed which member is active, the same
+  reasoning `codegen_sealed_match`'s own downcast already relies on. A
+  sealed-match wildcard arm now emits a plain alias to the subject
+  pointer itself, un-narrowed, matching check_sealed_match's own fix.
+  New runtime helpers: `lucid_rt_str_of_int`/`lucid_rt_str_of_float`
+  (`str(n)`/`str(f)`, `"%g"` for float matching the reference
+  interpreter's own `str(3.0) == "3"`), `lucid_rt_str_endswith`, and
+  (needing `lucid_list_str` to already exist, so it can't live in the
+  shared `runtime_prelude` emitted before any `list[T]` type at all)
+  `lucid_rt_sorted_str`, using `qsort`. `emit_set_type` mirrors
+  `emit_dict_type`: `_new`, `_contains` (a linear `strcmp` scan, same
+  discipline as `_get`/`_set`), and `_add` (a no-op if already
+  present). `codegen_for`'s own dispatch on the iterable's shape grew a
+  `DictType`/`SetType` case in its generic (non-literal, non-`range`)
+  fallback, and its `Call` case now falls through to that same generic
+  handling for any call that isn't `range(...)` instead of leaving
+  `loop_text` as an unsupported placeholder. `codegen_expr`'s own
+  Call-Ident argument codegen — and, critically, `infer_expr_type`'s
+  *own separate* Call-Ident case, which had the identical bidirectional
+  gap and was still silently dropping an unresolvable empty-literal
+  argument from `arg_types` entirely (not just mistyping it), breaking
+  arity matching for the whole call — both peek at the callee's first
+  registered signature the same way `check_call` now does.
+
+  Two of the real bugs found this way were in code this branch itself
+  had just written, not in anything pre-existing:
+  - **`infer_local_types`'s own match-arm narrowing bound a `case
+    none:` arm's alias to `NoneType`, instead of never binding it at
+    all.** The fix earlier in this branch that taught `infer_local_types`
+    to narrow a match arm's own alias (see the Design notes entry on
+    `hoist_propagate`) missed that a `case none:` arm should never bind
+    its alias to anything, the same rule `check_match`/`codegen_match_
+    arm` already follow — binding it to `NoneType` anyway meant a
+    *later, unrelated* arm reusing the same alias name (`checker.
+    lucid`'s own `check_call`, `at` used once in a `case Ident:` arm and
+    again in a sibling `case Attribute:` arm) had its own correct type
+    silently overwritten to `NoneType` for the rest of the pre-pass,
+    since every arm of every match statement shares the same `known`
+    dict. Root-caused with a from-scratch reproduction reusing one
+    alias name across sibling arms of an outer sealed match. Fixed by
+    skipping the bind whenever the narrowed type comes back `NoneType`.
+  - **`union_has_none_member`'s own codegen check didn't check the
+    *other* operand was actually `none`.** `codegen_expr`'s Binary case,
+    for `EQ`/`NOT_EQ`, checked "does the union side have a `none`
+    member" but never "is the other side actually the `none` literal"
+    — so `maybe(ok) == target` (a `str | none` compared against an
+    ordinary `str` variable) matched the `none`-comparison branch by
+    mistake and compiled to a bare tag check, silently ignoring
+    `target`'s own value entirely. Found while adding the *correct*
+    generalization (`union_member_eq`, for comparing against a
+    non-`none` value of a union member's exact type) right next to it.
+    Fixed by checking the other operand's own inferred type is
+    `NoneType` before taking that branch.
+
+  Every feature and bug fix above was verified the usual way (a
+  from-scratch minimal reproduction per shape, `gcc`-compiled, diffed
+  byte-for-byte against `lucid run`) before being folded into
+  `compile_demo_programs/checker_gaps.lucid`, which exercises the whole
+  checker.lucid feature set together.
 - `compile_demo.lucid` — **an actual compiler, written in Lucid,
   compiling real Lucid programs to native executables.**
   `examples/vectors.lucid` — classes, `dispatch def` operator
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles seventeen hand-written programs —
-  sixteen real files under `self-host/compile_demo_programs/`, plus
+  `codegen.lucid`. Also compiles eighteen hand-written programs —
+  seventeen real files under `self-host/compile_demo_programs/`, plus
   `imports_demo.lucid`, which lives directly under `self-host/` instead
   (see compile_demo.lucid's own header comment for why: its
   `from .lexer import ...` has to resolve to `self-host/lexer.lucid`
@@ -1130,6 +1308,17 @@ committed) re-runs the `lexer.lucid` half of this check on demand.
   union type that's neither a return type nor a field — the five real
   bugs `self-host/parser.lucid`'s own first full compile found (see the
   `codegen.lucid` entry above), exercised together in the one program
+  — and `checker_gaps` — a `dict[str, T]` for a class value (`Registry.
+  types: dict[str, LType]`) with item assignment (including overwriting
+  an existing key), a direct index read, and `.get()` returning `T |
+  none`; `x == default`/`x != none` for a union-typed value; a
+  union-typed parameter; matching a sealed hierarchy member of a union
+  by its own concrete subclasses (`case IntType:`/`case ListType:` on a
+  plain `LType`); a `for` loop over a `dict`'s own keys and over a
+  plain function call's own `list[str]` return value; `str()`/
+  `endswith()`/`sorted()`/`int()`; and `set[str]` with `add()`/`in`/
+  `not in` — the checker.lucid feature set and real bugs above,
+  exercised together in the one program
   — plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen

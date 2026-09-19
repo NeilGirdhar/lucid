@@ -208,7 +208,7 @@ report("a union-typed field is supported", "class Item:\n    value: int\n\nclass
 
 report("print() of a class with a union-typed field is rejected", "class Item:\n    value: int\n\nclass Holder:\n    payload: Item | none\n\ndef bad() -> int:\n    h = Holder(Item(1))\n    print(h)\n    return 0\n")
 
-report("a union-typed parameter is rejected", "class Item:\n    value: int\n\ndef bad(x: Item | none) -> int:\n    return 0\n")
+report("a union-typed parameter with no call site is still just supported, not exercised", "class Item:\n    value: int\n\ndef ok(x: Item | none) -> int:\n    return 0\n")
 
 report("print() of a union-typed value is rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    print(maybe_item(true))\n    return 0\n")
 
@@ -269,3 +269,29 @@ report("a match pattern outside the subject's own sealed hierarchy is rejected",
 report("a sealed class hierarchy match without a trailing wildcard is rejected", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef bad(n: Node) -> int:\n    match n as result:\n        case NumberNode:\n            return result.value\n    return 0\n")
 
 report("a union return type that's a strict subset of another is supported", "class Result:\n    value: int\n\nclass ItemError:\n    message: str\n\nclass OtherError:\n    message: str\n\ndef inner(ok: bool) -> Result | ItemError:\n    if ok:\n        return Result(1)\n    return ItemError(\"bad\")\n\ndef outer(ok: bool) -> Result | ItemError | OtherError:\n    return inner(ok)\n\ndef ok() -> int:\n    match outer(true) as r:\n        case Result:\n            print(r.value)\n        case ItemError:\n            print(r.message)\n        case OtherError:\n            print(r.message)\n    return 0\n")
+
+report("a union-typed parameter is supported", "class Item:\n    value: int\n\ndef describe(x: Item | none) -> int:\n    match x as result:\n        case Item:\n            return result.value\n        case none:\n            return -1\n\ndef ok() -> int:\n    print(describe(Item(5)))\n    print(describe(none))\n    return 0\n")
+
+report("dict item assignment is supported, including overwriting an existing key", "class Item:\n    value: int\n\ndef ok() -> int:\n    reg: dict[str, Item] = {:}\n    reg[\"a\"] = Item(1)\n    reg[\"a\"] = Item(2)\n    match reg.get(\"a\", none) as found:\n        case Item:\n            print(found.value)\n        case none:\n            print(-1)\n    return 0\n")
+
+report("dict item assignment on a non-dict receiver is rejected", "def bad() -> int:\n    xs: list[int] = [1, 2]\n    xs[\"a\"] = 1\n    return 0\n")
+
+report("a direct dict[str, T] index read is supported", "def ok() -> int:\n    d: dict[str, int] = {\"a\": 1}\n    print(d[\"a\"])\n    return 0\n")
+
+report("set[str] with add() and in/not in is supported", "def ok() -> int:\n    seen: set[str] = {}\n    seen.add(\"a\")\n    print(\"a\" in seen)\n    print(\"b\" not in seen)\n    return 0\n")
+
+report("set.add() with the wrong element type is rejected", "def bad() -> int:\n    seen: set[str] = {}\n    seen.add(1)\n    return 0\n")
+
+report("str.endswith() is supported", "def ok() -> int:\n    print(\"FooError\".endswith(\"Error\"))\n    print(\"Foo\".endswith(\"Error\"))\n    return 0\n")
+
+report("str.endswith() with a non-str argument is rejected", "def bad() -> bool:\n    return \"Foo\".endswith(1)\n")
+
+report("sorted() on a list[str] is supported", "def ok() -> int:\n    xs: list[str] = [\"b\", \"a\"]\n    ys = sorted(xs)\n    print(ys[0])\n    print(xs[0])\n    return 0\n")
+
+report("sorted() on a non-list[str] argument is rejected", "def bad() -> int:\n    xs: list[int] = [2, 1]\n    ys = sorted(xs)\n    return 0\n")
+
+report("comparing a union against a value of a type it doesn't contain is rejected", "def maybe(ok: bool) -> str | none:\n    if ok:\n        return \"x\"\n    return none\n\ndef bad(ok: bool) -> bool:\n    return maybe(ok) == 1\n")
+
+report("for-loop iteration over a dict's own keys is supported", "def ok() -> int:\n    d: dict[str, int] = {\"a\": 1, \"b\": 2}\n    total = 0\n    for k in d:\n        total = total + 1\n    print(total)\n    return 0\n")
+
+report("for-loop iteration over an arbitrary call's own list return value is supported", "def make_list() -> list[int]:\n    xs: list[int] = [1, 2, 3]\n    return xs\n\ndef ok() -> int:\n    total = 0\n    for n in make_list():\n        total = total + n\n    print(total)\n    return 0\n")

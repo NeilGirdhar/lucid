@@ -1196,7 +1196,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- for over a list literal, and range ---\n(no errors)",
         "--- for/while with if_broken ---\n(no errors)",
         "ERROR: list literal elements must all have the same type in this subset",
-        "ERROR: unsupported iterable expression in this subset (only a list literal, a list[T] value, or range(...) is supported)",
+        "ERROR: unsupported iterable expression in this subset (only a list literal, a list[T]/set[T] value, a dict[str, T] value, or range(...) is supported)",
         "ERROR: range(...) supports only one or two arguments in this subset",
         "--- print() of a class with int/bool/str fields is supported ---\n(no errors)",
         "ERROR: print() of a 'Outer' value is not supported in this subset",
@@ -1226,7 +1226,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- break in a nested loop's if_broken re-breaking the outer loop still passes ---\n(no errors)",
         "ERROR: cannot redefine builtin 'len' in this subset",
         "--- string indexing is supported ---\n(no errors)",
-        "ERROR: indexing is only supported on str/list[T] in this subset",
+        "ERROR: indexing is only supported on str/list[T]/dict[str, T] in this subset",
         "ERROR: string index must be int, got str",
         "--- typed empty list, append, index, and len are supported ---\n(no errors)",
         "ERROR: list.append() requires a single argument of type int",
@@ -1256,7 +1256,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- empty dict[str, V] literal with a declared type is supported ---\n(no errors)",
         "cannot infer the value type of an empty dict literal in this subset",
         "ERROR: dict literal keys must be str in this subset, got int",
-        "ERROR: dict.get() requires (str, int) arguments in this subset",
+        "ERROR: dict.get() requires (str, int) arguments, or (str, none), in this subset",
         "ERROR: print() of a dict value is not supported in this subset",
         "--- a module-level variable is readable inside a function ---\n(no errors)",
         "--- a module-level variable is readable inside a class method ---\n(no errors)",
@@ -1270,7 +1270,7 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "--- an empty list literal as a constructor argument infers from the field's declared type ---\n(no errors)",
         "--- a union-typed field is supported ---\n(no errors)",
         "ERROR: print() of a 'Holder' value is not supported in this subset",
-        "ERROR: parameter 'x' has an unsupported type (a union type is only supported as a function/method return type or a class field in this subset)",
+        "--- a union-typed parameter with no call site is still just supported, not exercised ---\n(no errors)",
         "ERROR: print() of a union-typed value is not supported in this subset",
         "ERROR: '?' is only supported on a union return type in this subset",
         "ERROR: '?' requires a union type with exactly one error variant (a class whose name ends in 'Error') in this subset",
@@ -1299,6 +1299,19 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: pattern type Other is not part of the same sealed class hierarchy as 'Node'",
         "ERROR: match on a sealed class hierarchy requires a trailing 'case _:' in this subset (exhaustively listing every concrete subclass isn't supported)",
         "--- a union return type that's a strict subset of another is supported ---\n(no errors)",
+        "--- a union-typed parameter is supported ---\n(no errors)",
+        "--- dict item assignment is supported, including overwriting an existing key ---\n(no errors)",
+        "ERROR: index assignment is only supported on dict[str, T] in this subset",
+        "--- a direct dict[str, T] index read is supported ---\n(no errors)",
+        "--- set[str] with add() and in/not in is supported ---\n(no errors)",
+        "ERROR: set.add() requires a single argument of type str",
+        "--- str.endswith() is supported ---\n(no errors)",
+        "ERROR: str.endswith() requires a single str argument in this subset",
+        "--- sorted() on a list[str] is supported ---\n(no errors)",
+        "ERROR: sorted() supports only a single list[str] argument in this subset",
+        "ERROR: operator EQ is not supported on (str | none, int) in this subset",
+        "--- for-loop iteration over a dict's own keys is supported ---\n(no errors)",
+        "--- for-loop iteration over an arbitrary call's own list return value is supported ---\n(no errors)",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1373,7 +1386,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 18] = [
+    let cases: [(&str, &str); 19] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1405,6 +1418,10 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         (
             "parser_gaps",
             "self-host/compile_demo_programs/parser_gaps.lucid",
+        ),
+        (
+            "checker_gaps",
+            "self-host/compile_demo_programs/checker_gaps.lucid",
         ),
         ("vectors", "examples/vectors.lucid"),
     ];

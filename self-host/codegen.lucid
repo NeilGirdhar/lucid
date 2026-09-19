@@ -46,10 +46,22 @@
 # variable declared inside one branch invisible after it, unlike Lucid's
 # own more permissive same-function visibility.
 
-from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, FloatLit, Propagate, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, FunctionDef, Param, FromImport, Hoisted, hoist_propagate
-from .types import LType, IntType, BoolType, StrType, FloatType, ClassType, ListType, DictType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, resolve_all_declarations, inherited_fields, class_assignable_to, is_subclass_of, class_tag
+from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, SetExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, FloatLit, Propagate, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, FunctionDef, Param, FromImport, Hoisted, hoist_propagate
+from .types import LType, IntType, BoolType, StrType, FloatType, ClassType, ListType, DictType, SetType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, resolve_all_declarations, inherited_fields, class_assignable_to, is_subclass_of, class_tag, union_has_none_member, union_member_type_equal
 
-runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}"
+runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}\n\n// str(n)/str(f) -- self-host/checker.lucid's/self-host/codegen.lucid's\n// own dominant `str()` use (`str(expr.span.line)`, `str(err_index)`,\n// `str(lit.value)` for a FloatLit's own float field), the other\n// direction from int(...)/float(...). \"%g\" for a float matches the\n// reference interpreter's own str(3.0) == \"3\" (no trailing \".0\") --\n// the same format print() already uses for a float value.\nstatic const char *lucid_rt_str_of_int(long n) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%ld\", n);\n    return result;\n}\n\nstatic const char *lucid_rt_str_of_float(double f) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%g\", f);\n    return result;\n}\n\n// s.endswith(suffix) -- checker.lucid's/codegen.lucid's own dominant\n// `?`-error-recognition heuristic (`mt.name.endswith(\"Error\")`).\nstatic long lucid_rt_str_endswith(const char *s, const char *suffix) {\n    long ls = (long) strlen(s);\n    long lsuf = (long) strlen(suffix);\n    if (lsuf > ls) {\n        return 0;\n    }\n    return strcmp(s + (ls - lsuf), suffix) == 0;\n}"
+
+# `sorted(names)` -- types.lucid's/checker.lucid's own dominant use
+# (`sorted_member_names`, `class_tag`), sorting a *fresh copy* of a
+# `list[str]` ascending (verified directly against the reference
+# interpreter: the original list is untouched). Needs `lucid_list_str`
+# to already exist, so unlike every other runtime helper this can't live
+# in runtime_prelude itself (emitted before any list[T] type at all) --
+# codegen_module appends this right after `emit_list_type(StrType())`
+# instead. qsort's own comparator takes `const void *`, matching a
+# `lucid_list_str`'s own `items` array element (`const char **`) once
+# cast.
+sorted_str_prelude = "static int lucid_rt_strcmp_qsort(const void *a, const void *b) {\n    const char *sa = *(const char **) a;\n    const char *sb = *(const char **) b;\n    return strcmp(sa, sb);\n}\n\nstatic lucid_list_str *lucid_rt_sorted_str(lucid_list_str *lst) {\n    lucid_list_str *copy = lucid_list_str_of(lst->len, lst->items);\n    qsort(copy->items, copy->len, sizeof(const char *), lucid_rt_strcmp_qsort);\n    return copy;\n}"
 
 # Every class gets a `typedef struct Name Name;` forward declaration,
 # emitted for every class before any class's full struct body -- a
@@ -226,18 +238,53 @@ def emit_list_type(element_type: LType) -> str:
 # always `const char *`, never mangled into the C type name the way an
 # element/value type is (`lucid_dict_str_int`, not
 # `lucid_dict_str_str_int`) -- this subset's `DictType` only ever has a
-# `str` key (see types.lucid's own note on why). `_get` is a linear
-# `strcmp` scan, not a hash table -- fine for the small, mostly
+# `str` key (see types.lucid's own note on why). `_get`/`_set` are both a
+# linear `strcmp` scan, not a hash table -- fine for the small, mostly
 # compile-time-constant tables this subset actually compiles
 # (self-host/lexer.lucid's own `keywords`/`single`), not a general-
 # purpose dict implementation.
+#
+# `_new`/`_set` (mirroring `lucid_list_T`'s own `_new`/`_append`, a
+# `cap`-tracked, `realloc`-doubled growable buffer) exist for
+# `checker.lucid`'s/`types.lucid`'s own dominant mutation shape --
+# `known[name] = t`, `self.classes[cd.name] = ClassSig(...)` -- a real
+# dict[str, T] item write, not just the bulk `_of` construction a dict
+# *literal* compiles to (see codegen_stmt's own Assignment arm, `case
+# Index:`). `_set` overwrites an existing key's value in place if found,
+# otherwise appends a new key/value pair, growing exactly like
+# `lucid_list_T_append` does. `_of` itself is now built the same way
+# `lucid_list_T_of` already is -- through `_new`+`_set` in a loop, not
+# by aliasing the caller's own (typically stack- or static-allocated)
+# arrays directly, since those could never be safely `realloc`'d by a
+# later `_set` call if this dict is mutated afterward.
 def emit_dict_type(value_type: LType) -> str:
     ctype = c_type_of(value_type)
     name = "lucid_dict_str_" + mangle_component(value_type)
     parts: list[str] = []
-    parts.append("typedef struct {\n    const char **keys;\n    " + ctype + " *values;\n    long len;\n} " + name + ";")
-    parts.append("static " + name + " *" + name + "_of(long n, const char **keys, " + ctype + " *values) {\n    " + name + " *d = malloc(sizeof(" + name + "));\n    d->keys = keys;\n    d->values = values;\n    d->len = n;\n    return d;\n}")
+    parts.append("typedef struct {\n    const char **keys;\n    " + ctype + " *values;\n    long len;\n    long cap;\n} " + name + ";")
+    parts.append("static " + name + " *" + name + "_new(void) {\n    " + name + " *d = malloc(sizeof(" + name + "));\n    d->keys = NULL;\n    d->values = NULL;\n    d->len = 0;\n    d->cap = 0;\n    return d;\n}")
+    parts.append("static void " + name + "_set(" + name + " *d, const char *key, " + ctype + " value) {\n    long i = 0;\n    while (i < d->len) {\n        if (strcmp(d->keys[i], key) == 0) {\n            d->values[i] = value;\n            return;\n        }\n        i = i + 1;\n    }\n    if (d->len >= d->cap) {\n        d->cap = (d->cap == 0) ? 4 : d->cap * 2;\n        d->keys = realloc(d->keys, sizeof(const char *) * d->cap);\n        d->values = realloc(d->values, sizeof(" + ctype + ") * d->cap);\n    }\n    d->keys[d->len] = key;\n    d->values[d->len] = value;\n    d->len = d->len + 1;\n}")
+    parts.append("static " + name + " *" + name + "_of(long n, const char **keys, " + ctype + " *values) {\n    " + name + " *d = " + name + "_new();\n    long i = 0;\n    while (i < n) {\n        " + name + "_set(d, keys[i], values[i]);\n        i = i + 1;\n    }\n    return d;\n}")
     parts.append("static " + ctype + " " + name + "_get(" + name + " *d, const char *key, " + ctype + " default_value) {\n    long i = 0;\n    while (i < d->len) {\n        if (strcmp(d->keys[i], key) == 0) {\n            return d->values[i];\n        }\n        i = i + 1;\n    }\n    return default_value;\n}")
+    parts.append("static " + ctype + " " + name + "_index(" + name + " *d, const char *key) {\n    long i = 0;\n    while (i < d->len) {\n        if (strcmp(d->keys[i], key) == 0) {\n            return d->values[i];\n        }\n        i = i + 1;\n    }\n    fprintf(stderr, \"Runtime Error: key %s not found\\n\", key);\n    exit(1);\n}")
+    return join_with(parts, "\n\n")
+
+# `set[str]` -- codegen.lucid's own dominant use (`names: set[str] = {}`,
+# tracking already-hoisted local names; `seen: set[str]`, types.lucid's
+# own resolve_all_declarations, tracking already-inlined files), a
+# growable array with a linear `strcmp` membership scan, the same
+# discipline (and the same reason -- small, mostly compile-time-constant
+# sets) `lucid_dict_str_V`'s own `_get`/`_set` already use. `_add` is a
+# no-op if the element is already present, matching how a real Lucid
+# `set` never duplicates.
+def emit_set_type(element_type: LType) -> str:
+    ctype = c_type_of(element_type)
+    name = "lucid_set_" + mangle_component(element_type)
+    parts: list[str] = []
+    parts.append("typedef struct {\n    " + ctype + " *items;\n    long len;\n    long cap;\n} " + name + ";")
+    parts.append("static " + name + " *" + name + "_new(void) {\n    " + name + " *s = malloc(sizeof(" + name + "));\n    s->items = NULL;\n    s->len = 0;\n    s->cap = 0;\n    return s;\n}")
+    parts.append("static long " + name + "_contains(" + name + " *s, " + ctype + " value) {\n    long i = 0;\n    while (i < s->len) {\n        if (strcmp(s->items[i], value) == 0) {\n            return 1;\n        }\n        i = i + 1;\n    }\n    return 0;\n}")
+    parts.append("static void " + name + "_add(" + name + " *s, " + ctype + " value) {\n    if (" + name + "_contains(s, value)) {\n        return;\n    }\n    if (s->len >= s->cap) {\n        s->cap = (s->cap == 0) ? 4 : s->cap * 2;\n        s->items = realloc(s->items, sizeof(" + ctype + ") * s->cap);\n    }\n    s->items[s->len] = value;\n    s->len = s->len + 1;\n}")
     return join_with(parts, "\n\n")
 
 # The C name for a union return type -- `mangle_component(UnionLType(...))`
@@ -272,6 +319,32 @@ def cast_if_needed(expected: LType, actual: LType, code: str) -> str:
         case _:
             pass
     return code
+
+# Like cast_if_needed, but also covers a plain (concrete) value flowing
+# into a *union*-typed slot -- `forward(x: Item | none)` called as
+# `forward(Item(5))` or `forward(none)` (self-host/checker.lucid's own
+# `expected_return: LType | none` parameter, once a parameter was
+# allowed to be a union at all: see method_signature_for/
+# collect_function_signature). Mirrors the wrap codegen_expr's own
+# Construct case already gives a union-typed *field* constructed from a
+# member value -- find the matching member, cast if it's a narrower
+# subtype of that member, then wrap into the union's own tag/field
+# layout. A no-op when `actual` is already the exact same union (the
+# common "just forward this parameter along" case throughout
+# checker.lucid/codegen.lucid's own mutually recursive methods).
+def cast_or_wrap(classes: dict[str, ClassSig], expected: LType, actual: LType, code: str) -> str:
+    match expected as et:
+        case UnionLType:
+            if types_equal(expected, actual):
+                return code
+            match find_union_member(classes, et.members, actual) as target:
+                case LType:
+                    wrap_code = cast_if_needed(target, actual, code)
+                    return wrap_union_value(et.members, target, wrap_code)
+                case none:
+                    return code
+        case _:
+            return cast_if_needed(expected, actual, code)
 
 # A union type -- `Token | LexError`, `Token | none`, `list[Token] |
 # LexError` -- is a plain, by-value (not heap-allocated) tagged C
@@ -338,6 +411,32 @@ def union_member_index(members: list[LType], m: LType) -> int:
             return i
         i = i + 1
     return 0
+
+# `sibling.sealed_root == root` -- `union_code` (a union value known to
+# have `member_t` as one of its own members) compared for equality
+# against `plain_code` (a plain value of exactly `member_t`): true only
+# when `union_code`'s own tag matches `member_t`'s position *and* the
+# two values' content agrees (`strcmp` for str, `==` directly for
+# int/bool -- the only member types this ever needs, matching
+# check_binary's own restriction). `negate` builds the `!=` form
+# instead -- `!(...)` around the whole conjunction, not a per-piece
+# negation, since De Morgan's version would need the tag check negated
+# too, which is wrong (the tag mismatching alone already makes `!=`
+# true, without needing to compare content at all).
+def union_member_eq(u: UnionLType, member_t: LType, union_code: str, plain_code: str, negate: bool) -> str:
+    idx = union_member_index(u.members, member_t)
+    tag_eq = union_code + ".tag == " + str(idx)
+    field_code = union_code + ".v" + str(idx)
+    content_eq = "0"
+    match member_t as mt:
+        case StrType:
+            content_eq = "strcmp(" + field_code + ", " + plain_code + ") == 0"
+        case _:
+            content_eq = "(" + field_code + " == " + plain_code + ")"
+    combined = "(" + tag_eq + " && " + content_eq + ")"
+    if negate:
+        return "(!" + combined + ")"
+    return combined
 
 # Wraps `value_code` (a value of type `m`, already codegen'd) into a
 # union-of-`members` compound literal -- `(lucid_union_LexError_Token)
@@ -434,6 +533,8 @@ def c_type_of(t: LType) -> str:
             return "lucid_list_" + mangle_component(result.element_type) + " *"
         case DictType:
             return "lucid_dict_str_" + mangle_component(result.value_type) + " *"
+        case SetType:
+            return "lucid_set_" + mangle_component(result.element_type) + " *"
         case UnionLType:
             # By value, not by pointer -- see emit_union_type's own
             # header comment for why.
@@ -623,7 +724,7 @@ class Codegen:
                         return self.dispatch_return_type(result.op, left_type, rt)
                     case _:
                         pass
-                if result.op == "AND" or result.op == "OR" or result.op == "EQ" or result.op == "NOT_EQ" or result.op == "LT" or result.op == "LT_EQ" or result.op == "GT" or result.op == "GT_EQ":
+                if result.op == "AND" or result.op == "OR" or result.op == "EQ" or result.op == "NOT_EQ" or result.op == "LT" or result.op == "LT_EQ" or result.op == "GT" or result.op == "GT_EQ" or result.op == "IN" or result.op == "NOT_IN":
                     return BoolType()
                 if result.op == "ADD":
                     match left_type as lt:
@@ -657,6 +758,8 @@ class Codegen:
                         return StrType()
                     case ListType:
                         return rt.element_type
+                    case DictType:
+                        return rt.value_type
                     case _:
                         return none
             case ListExpr:
@@ -689,6 +792,14 @@ class Codegen:
                         return DictType(vt)
                     case none:
                         return none
+            case SetExpr:
+                if len(result.elements) == 0:
+                    return none
+                match self.infer_expr_type(result.elements[0], known) as set_et2:
+                    case LType:
+                        return SetType(set_et2)
+                    case none:
+                        return none
             case Call:
                 match result.func as callee:
                     case Ident:
@@ -698,13 +809,78 @@ class Codegen:
                             return IntType()
                         if callee.name == "float":
                             return FloatType()
+                        if callee.name == "str":
+                            return StrType()
+                        if callee.name == "sorted" and len(result.args) == 1:
+                            match self.infer_expr_type(result.args[0].value, known) as sorted_at:
+                                case ListType:
+                                    return sorted_at
+                                case _:
+                                    pass
+                            return none
+                        # Mirrors codegen_expr's own Call-Ident case (and
+                        # checker.lucid's check_call): peek at the
+                        # callee's first registered signature so an
+                        # empty list/dict/set literal argument
+                        # (`resolve_all_declarations(stmts, {})`) infers
+                        # from the matching parameter's own declared
+                        # type -- without this, `infer_expr_type` on the
+                        # empty literal returns `none`, silently
+                        # *dropping* that argument from `arg_types`
+                        # (case none: pass) rather than just mistyping
+                        # it, so `find_signature_assignable` sees the
+                        # wrong arity entirely and the whole call's own
+                        # return type comes back `none`.
+                        infer_param_types: list[LType] = []
+                        match self.functions.signatures.get(callee.name, none) as infer_sigs:
+                            case list[FuncSig]:
+                                if len(infer_sigs) > 0:
+                                    infer_param_types = infer_sigs[0].param_types
+                            case none:
+                                pass
                         arg_types: list[LType] = []
+                        ii = 0
                         for a in result.args:
-                            match self.infer_expr_type(a.value, known) as at:
+                            expected_ipt: LType | none = none
+                            if ii < len(infer_param_types):
+                                expected_ipt = infer_param_types[ii]
+                            inferred_at: LType | none = none
+                            match a.value as iav:
+                                case ListExpr:
+                                    if len(iav.elements) == 0:
+                                        match expected_ipt as iept:
+                                            case ListType:
+                                                inferred_at = iept
+                                            case _:
+                                                inferred_at = self.infer_expr_type(iav, known)
+                                    else:
+                                        inferred_at = self.infer_expr_type(iav, known)
+                                case DictExpr:
+                                    if len(iav.entries) == 0:
+                                        match expected_ipt as iept2:
+                                            case DictType:
+                                                inferred_at = iept2
+                                            case _:
+                                                inferred_at = self.infer_expr_type(iav, known)
+                                    else:
+                                        inferred_at = self.infer_expr_type(iav, known)
+                                case SetExpr:
+                                    if len(iav.elements) == 0:
+                                        match expected_ipt as iept3:
+                                            case SetType:
+                                                inferred_at = iept3
+                                            case _:
+                                                inferred_at = self.infer_expr_type(iav, known)
+                                    else:
+                                        inferred_at = self.infer_expr_type(iav, known)
+                                case _:
+                                    inferred_at = self.infer_expr_type(iav, known)
+                            match inferred_at as at:
                                 case LType:
                                     arg_types.append(at)
                                 case none:
                                     pass
+                            ii = ii + 1
                         match find_signature_assignable(self.classes, self.functions, callee.name, arg_types) as sig:
                             case FuncSig:
                                 return sig.return_type
@@ -722,6 +898,10 @@ class Codegen:
                                                 return none
                                     case none:
                                         return none
+                            case StrType:
+                                if callee.attr == "endswith":
+                                    return BoolType()
+                                return none
                             case ListType:
                                 if callee.attr == "pop":
                                     return rt.element_type
@@ -734,7 +914,28 @@ class Codegen:
                                 # isn't assigned.
                                 return none
                             case DictType:
-                                if callee.attr == "get":
+                                if callee.attr == "get" and len(result.args) == 2:
+                                    # Mirrors checker.lucid's own
+                                    # check_call DictType case: a bare
+                                    # `none` default (`self.classes.get(
+                                    # cd.name, none)`) means the result
+                                    # is `V | none`, not just `V` --
+                                    # codegen_expr's own `.get()` call
+                                    # site has to agree, or a `match`/`!=
+                                    # none` on the result narrows against
+                                    # the wrong (non-union) type.
+                                    match result.args[1].value as default_v:
+                                        case LiteralExpr:
+                                            match default_v.value as lit:
+                                                case NoneLit:
+                                                    opt_members: list[LType] = []
+                                                    opt_members.append(rt.value_type)
+                                                    opt_members.append(NoneType())
+                                                    return UnionLType(opt_members)
+                                                case _:
+                                                    pass
+                                        case _:
+                                            pass
                                     return rt.value_type
                                 return none
                             case _:
@@ -784,11 +985,26 @@ class Codegen:
                             return IntType()
                     case _:
                         pass
-                return none
+                # Any other call (not `range`) whose own return type is a
+                # list[T]/set[T]/dict[str, T] -- see codegen_for's own
+                # matching fix for why this can't just error out here.
+                match self.infer_expr_type(iterable, known) as cit2:
+                    case ListType:
+                        return cit2.element_type
+                    case SetType:
+                        return cit2.element_type
+                    case DictType:
+                        return StrType()
+                    case _:
+                        return none
             case _:
                 match self.infer_expr_type(iterable, known) as it:
                     case ListType:
                         return it.element_type
+                    case SetType:
+                        return it.element_type
+                    case DictType:
+                        return StrType()
                     case _:
                         return none
 
@@ -891,6 +1107,89 @@ class Codegen:
                         return "(" + cmp + " >= 0)"
                     if result.op == "ADD":
                         return "lucid_rt_str_concat(" + left_code + ", " + right_code + ")"
+                if result.op == "EQ" or result.op == "NOT_EQ":
+                    # `self.classes.get(cd.name, none) != none` --
+                    # checker.lucid's own check_binary now accepts this
+                    # (a union with `none` as a member, compared against
+                    # a bare `none` literal on the other side) -- neither
+                    # operand's own C representation is a plain scalar
+                    # here (the union side is a tagged struct, and C has
+                    # no `!=`/`==` on structs at all), so this compiles
+                    # to a tag check against whichever member index is
+                    # `none`, never the generic fallback below.
+                    cmp_op = "=="
+                    if result.op == "NOT_EQ":
+                        cmp_op = "!="
+                    right_is_none = false
+                    match right_type as rnt:
+                        case NoneType:
+                            right_is_none = true
+                        case _:
+                            pass
+                    left_is_none = false
+                    match left_type as lnt:
+                        case NoneType:
+                            left_is_none = true
+                        case _:
+                            pass
+                    match left_type as ult:
+                        case UnionLType:
+                            if union_has_none_member(ult) and right_is_none:
+                                return "(" + left_code + ".tag " + cmp_op + " " + str(union_member_index(ult.members, NoneType())) + ")"
+                        case _:
+                            pass
+                    match right_type as urt:
+                        case UnionLType:
+                            if union_has_none_member(urt) and left_is_none:
+                                return "(" + right_code + ".tag " + cmp_op + " " + str(union_member_index(urt.members, NoneType())) + ")"
+                        case _:
+                            pass
+                    # `sibling.sealed_root == root` (`types.lucid`'s own
+                    # class_tag) -- generalizes the `none` case just
+                    # above: one side a union whose own member type
+                    # matches the other side's exact type (int/bool/str
+                    # only, same restriction the plain EQ/NOT_EQ rule
+                    # above already has). Compiles to a tag check plus a
+                    # content compare (`strcmp` for str, `==`/`!=`
+                    # directly for int/bool) -- true only when the union
+                    # side is actually that member *and* its value
+                    # matches; false outright whenever the union side is
+                    # its `none` member or any other member, with no
+                    # content compare needed for that case at all.
+                    match left_type as ult2:
+                        case UnionLType:
+                            match right_type as rt_concrete:
+                                case LType:
+                                    if union_member_type_equal(ult2, rt_concrete):
+                                        return union_member_eq(ult2, rt_concrete, left_code, right_code, result.op == "NOT_EQ")
+                                case none:
+                                    pass
+                        case _:
+                            pass
+                    match right_type as urt2:
+                        case UnionLType:
+                            match left_type as lt_concrete:
+                                case LType:
+                                    if union_member_type_equal(urt2, lt_concrete):
+                                        return union_member_eq(urt2, lt_concrete, right_code, left_code, result.op == "NOT_EQ")
+                                case none:
+                                    pass
+                        case _:
+                            pass
+                if result.op == "IN" or result.op == "NOT_IN":
+                    # `path not in seen` (`types.lucid`'s own
+                    # resolve_all_declarations) -- membership in a
+                    # set[T], compiled to the matching
+                    # `lucid_set_<T>_contains` call.
+                    match right_type as rst:
+                        case SetType:
+                            set_name3 = "lucid_set_" + mangle_component(rst.element_type)
+                            contains_expr = set_name3 + "_contains(" + right_code + ", " + left_code + ")"
+                            if result.op == "NOT_IN":
+                                return "(!" + contains_expr + ")"
+                            return "(" + contains_expr + " != 0)"
+                        case _:
+                            pass
                 if result.op == "FLOOR_DIV":
                     return "lucid_rt_floordiv(" + left_code + ", " + right_code + ")"
                 if result.op == "MOD":
@@ -1020,6 +1319,12 @@ class Codegen:
                     case ListType:
                         name = "lucid_list_" + mangle_component(rt.element_type)
                         return name + "_get(" + receiver_code + ", " + index_code + ")"
+                    case DictType:
+                        # `copied[key] = scope[key]` -- a direct dict
+                        # item read, distinct from `.get(key, default)`
+                        # (see check_expr's own Index/DictType case).
+                        dname = "lucid_dict_str_" + mangle_component(rt.value_type)
+                        return dname + "_index(" + receiver_code + ", " + index_code + ")"
                     case _:
                         return "lucid_rt_str_index(" + receiver_code + ", " + index_code + ")"
             case ListExpr:
@@ -1052,18 +1357,93 @@ class Codegen:
                         return name + "_of(" + str(len(key_codes)) + ", (const char *[]){" + join_with(key_codes, ", ") + "}, (" + vtype + "[]){" + join_with(value_codes, ", ") + "})"
                     case _:
                         return "0 /* unsupported dict literal */"
+            case SetExpr:
+                # `names: set[str] = {}` -- codegen.lucid's own dominant
+                # (and only, so far) set-literal shape is always empty,
+                # populated afterward via `.add(...)`; a non-empty set
+                # literal has no expression-level C equivalent without a
+                # GNU statement expression, so it's honestly left
+                # unsupported rather than half-built.
+                match self.infer_expr_type(e, known) as st:
+                    case SetType:
+                        if len(result.elements) == 0:
+                            return "lucid_set_" + mangle_component(st.element_type) + "_new()"
+                        return "0 /* unsupported non-empty set literal */"
+                    case _:
+                        return "0 /* unsupported set literal */"
             case Call:
                 match result.func as callee:
                     case Ident:
+                        # Mirrors checker.lucid's own check_call: peek at
+                        # the callee's first registered signature so an
+                        # empty list/dict/set literal argument
+                        # (`resolve_all_declarations(stmts, {})`) can
+                        # codegen from the matching parameter's own
+                        # declared type, the same bidirectional trick a
+                        # VarDef/Construct argument already gets.
+                        callee_param_types2: list[LType] = []
+                        match self.functions.signatures.get(callee.name, none) as callee_sigs2:
+                            case list[FuncSig]:
+                                if len(callee_sigs2) > 0:
+                                    callee_param_types2 = callee_sigs2[0].param_types
+                            case none:
+                                pass
                         arg_codes: list[str] = []
                         arg_types: list[LType] = []
+                        ci = 0
                         for a in result.args:
-                            arg_codes.append(self.codegen_expr(a.value, known))
-                            match self.infer_expr_type(a.value, known) as at:
+                            expected_pt: LType | none = none
+                            if ci < len(callee_param_types2):
+                                expected_pt = callee_param_types2[ci]
+                            arg_code3 = "0"
+                            arg_type3: LType | none = none
+                            match a.value as av3:
+                                case ListExpr:
+                                    if len(av3.elements) == 0:
+                                        match expected_pt as ept4:
+                                            case ListType:
+                                                arg_code3 = "lucid_list_" + mangle_component(ept4.element_type) + "_new()"
+                                                arg_type3 = ept4
+                                            case _:
+                                                arg_code3 = self.codegen_expr(av3, known)
+                                                arg_type3 = self.infer_expr_type(av3, known)
+                                    else:
+                                        arg_code3 = self.codegen_expr(av3, known)
+                                        arg_type3 = self.infer_expr_type(av3, known)
+                                case DictExpr:
+                                    if len(av3.entries) == 0:
+                                        match expected_pt as ept5:
+                                            case DictType:
+                                                arg_code3 = "lucid_dict_str_" + mangle_component(ept5.value_type) + "_of(0, (const char *[]){0}, (" + c_type_of(ept5.value_type) + "[]){0})"
+                                                arg_type3 = ept5
+                                            case _:
+                                                arg_code3 = self.codegen_expr(av3, known)
+                                                arg_type3 = self.infer_expr_type(av3, known)
+                                    else:
+                                        arg_code3 = self.codegen_expr(av3, known)
+                                        arg_type3 = self.infer_expr_type(av3, known)
+                                case SetExpr:
+                                    if len(av3.elements) == 0:
+                                        match expected_pt as ept6:
+                                            case SetType:
+                                                arg_code3 = "lucid_set_" + mangle_component(ept6.element_type) + "_new()"
+                                                arg_type3 = ept6
+                                            case _:
+                                                arg_code3 = self.codegen_expr(av3, known)
+                                                arg_type3 = self.infer_expr_type(av3, known)
+                                    else:
+                                        arg_code3 = self.codegen_expr(av3, known)
+                                        arg_type3 = self.infer_expr_type(av3, known)
+                                case _:
+                                    arg_code3 = self.codegen_expr(av3, known)
+                                    arg_type3 = self.infer_expr_type(av3, known)
+                            arg_codes.append(arg_code3)
+                            match arg_type3 as at:
                                 case LType:
                                     arg_types.append(at)
                                 case none:
                                     pass
+                            ci = ci + 1
                         if callee.name == "print":
                             return self.codegen_print(result.args, known)
                         if callee.name == "len" and len(result.args) == 1:
@@ -1081,6 +1461,23 @@ class Codegen:
                             return "(atol(" + arg_codes[0] + "))"
                         if callee.name == "float" and len(result.args) == 1:
                             return "(strtod(" + arg_codes[0] + ", NULL))"
+                        # `str(n)` -- the other direction, a number-to-
+                        # str conversion (checker.lucid's/codegen.lucid's
+                        # own dominant use); dispatches on the argument's
+                        # own static type since C has no single runtime
+                        # helper polymorphic over int/double.
+                        if callee.name == "str" and len(result.args) == 1:
+                            match self.infer_expr_type(result.args[0].value, known) as st:
+                                case FloatType:
+                                    return "lucid_rt_str_of_float(" + arg_codes[0] + ")"
+                                case _:
+                                    return "lucid_rt_str_of_int(" + arg_codes[0] + ")"
+                        # `sorted(names)` -- a fresh, ascending-sorted
+                        # copy of a list[str] (verified directly against
+                        # the reference interpreter: the original list is
+                        # untouched).
+                        if callee.name == "sorted" and len(result.args) == 1:
+                            return "lucid_rt_sorted_str(" + arg_codes[0] + ")"
                         match find_signature_assignable(self.classes, self.functions, callee.name, arg_types) as sig:
                             case FuncSig:
                                 # A subtype argument value (`Binary`,
@@ -1090,22 +1487,19 @@ class Codegen:
                                 # Construct argument already gets (see
                                 # codegen_expr's own Construct case) --
                                 # `Binary *` and `Expr *` are unrelated C
-                                # struct types here.
+                                # struct types here. A concrete value
+                                # flowing into a *union*-typed parameter
+                                # (`expected_return: LType | none`, once
+                                # a parameter was allowed to be a union
+                                # at all) needs the matching wrap
+                                # instead -- see cast_or_wrap's own
+                                # header comment.
                                 cast_codes: list[str] = []
                                 i = 0
                                 while i < len(arg_codes) and i < len(sig.param_types):
                                     cast_code = arg_codes[i]
                                     if i < len(arg_types):
-                                        match sig.param_types[i] as pt:
-                                            case ClassType:
-                                                match arg_types[i] as at2:
-                                                    case ClassType:
-                                                        if at2.name != pt.name:
-                                                            cast_code = "(" + c_type_of(pt) + ") " + cast_code
-                                                    case _:
-                                                        pass
-                                            case _:
-                                                pass
+                                        cast_code = cast_or_wrap(self.classes, sig.param_types[i], arg_types[i], cast_code)
                                     cast_codes.append(cast_code)
                                     i = i + 1
                                 name = mangled_name(self.functions, sig)
@@ -1115,6 +1509,11 @@ class Codegen:
                     case Attribute:
                         receiver_code = self.codegen_expr(callee.value, known)
                         match self.infer_expr_type(callee.value, known) as rt:
+                            case StrType:
+                                if callee.attr == "endswith" and len(result.args) == 1:
+                                    suffix_code = self.codegen_expr(result.args[0].value, known)
+                                    return "lucid_rt_str_endswith(" + receiver_code + ", " + suffix_code + ")"
+                                return "0 /* unsupported str method */"
                             case ListType:
                                 name = "lucid_list_" + mangle_component(rt.element_type)
                                 if callee.attr == "append" and len(result.args) == 1:
@@ -1141,7 +1540,7 @@ class Codegen:
                                                     if mi < len(method_sig.param_types):
                                                         match self.infer_expr_type(a.value, known) as at4:
                                                             case LType:
-                                                                arg_code2 = cast_if_needed(method_sig.param_types[mi], at4, arg_code2)
+                                                                arg_code2 = cast_or_wrap(self.classes, method_sig.param_types[mi], at4, arg_code2)
                                                             case none:
                                                                 pass
                                                     method_arg_codes.append(arg_code2)
@@ -1156,10 +1555,63 @@ class Codegen:
                             case DictType:
                                 if callee.attr == "get" and len(result.args) == 2:
                                     key_code = self.codegen_expr(result.args[0].value, known)
-                                    default_code = self.codegen_expr(result.args[1].value, known)
                                     name = "lucid_dict_str_" + mangle_component(rt.value_type)
+                                    match result.args[1].value as default_v:
+                                        case LiteralExpr:
+                                            match default_v.value as lit:
+                                                case NoneLit:
+                                                    # `self.classes.get(
+                                                    # cd.name, none)` --
+                                                    # infer_expr_type's
+                                                    # own DictType.get()
+                                                    # case already made
+                                                    # this a `V | none`
+                                                    # union (see its
+                                                    # header comment);
+                                                    # the dict's own
+                                                    # `_get` always
+                                                    # returns a bare
+                                                    # `ctype` though (a
+                                                    # pointer for every
+                                                    # class/list value
+                                                    # type this shape
+                                                    # actually needs), so
+                                                    # the call site has
+                                                    # to build the tagged
+                                                    # union struct itself
+                                                    # -- a NULL sentinel
+                                                    # default doubles as
+                                                    # "not found", no
+                                                    # GNU statement
+                                                    # expression needed
+                                                    # since `_get` is a
+                                                    # pure lookup, safe
+                                                    # to call twice.
+                                                    call_expr = name + "_get(" + receiver_code + ", " + key_code + ", NULL)"
+                                                    opt_members2: list[LType] = []
+                                                    opt_members2.append(rt.value_type)
+                                                    opt_members2.append(NoneType())
+                                                    found_code = wrap_union_value(opt_members2, rt.value_type, call_expr)
+                                                    missing_code = wrap_union_value(opt_members2, NoneType(), "")
+                                                    return "((" + call_expr + " != NULL) ? " + found_code + " : " + missing_code + ")"
+                                                case _:
+                                                    pass
+                                        case _:
+                                            pass
+                                    default_code = self.codegen_expr(result.args[1].value, known)
                                     return name + "_get(" + receiver_code + ", " + key_code + ", " + default_code + ")"
                                 return "0 /* unsupported dict method */"
+                            case SetType:
+                                if callee.attr == "add" and len(result.args) == 1:
+                                    value_code2 = self.codegen_expr(result.args[0].value, known)
+                                    match self.infer_expr_type(result.args[0].value, known) as at5:
+                                        case LType:
+                                            value_code2 = cast_if_needed(rt.element_type, at5, value_code2)
+                                        case none:
+                                            pass
+                                    set_name2 = "lucid_set_" + mangle_component(rt.element_type)
+                                    return set_name2 + "_add(" + receiver_code + ", " + value_code2 + ")"
+                                return "0 /* unsupported set method */"
                             case _:
                                 return "0 /* unsupported method call */"
                     case _:
@@ -1309,6 +1761,21 @@ class Codegen:
                             value_code = self.codegen_expr(v, known)
                             if inferred == none:
                                 inferred = self.infer_expr_type(v, known)
+                    case SetExpr:
+                        # Same bidirectional case as the empty list/dict
+                        # literal above -- `names: set[str] = {}`
+                        # (codegen.lucid's own dominant shape) is always
+                        # empty at the literal.
+                        if len(v.elements) == 0:
+                            match inferred as it:
+                                case SetType:
+                                    value_code = "lucid_set_" + mangle_component(it.element_type) + "_new()"
+                                case _:
+                                    value_code = self.codegen_expr(v, known)
+                        else:
+                            value_code = self.codegen_expr(v, known)
+                            if inferred == none:
+                                inferred = self.infer_expr_type(v, known)
                     case Expr:
                         value_code = self.codegen_expr(v, known)
                         initializer_type = self.infer_expr_type(v, known)
@@ -1451,6 +1918,27 @@ class Codegen:
                             case _:
                                 pass
                         return prelude + indent + receiver_code + "->" + target.attr + " = " + value_code + ";"
+                    case Index:
+                        # `known[name] = t` / `self.classes[cd.name] =
+                        # ClassSig(...)` (checker.lucid's own dominant
+                        # dict-mutation shape) -- compiles to the
+                        # matching `lucid_dict_str_<V>_set` call
+                        # (checker.lucid's own check_stmt Assignment arm
+                        # only accepts this when the receiver is a
+                        # dict[str, T] in the first place).
+                        dict_receiver_code = self.codegen_expr(target.value, known)
+                        key_code = self.codegen_expr(target.index, known)
+                        match self.infer_expr_type(target.value, known) as dict_rt:
+                            case DictType:
+                                dict_name = "lucid_dict_str_" + mangle_component(dict_rt.value_type)
+                                match self.infer_expr_type(rhs_expr, known) as dict_vt:
+                                    case LType:
+                                        value_code = cast_if_needed(dict_rt.value_type, dict_vt, value_code)
+                                    case none:
+                                        pass
+                                return prelude + indent + dict_name + "_set(" + dict_receiver_code + ", " + key_code + ", " + value_code + ");"
+                            case _:
+                                return prelude + indent + "/* unsupported index assignment */;"
                     case _:
                         name = self.ident_target_name(result.target)
                         match self.infer_expr_type(rhs_expr, known) as it:
@@ -2105,7 +2593,24 @@ class Codegen:
                     case none:
                         pass
             case none:
-                pass
+                # `match m as mt: case ClassType: ... case _:
+                # ok_types.append(mt)` (checker.lucid's own
+                # check_propagate) -- a wildcard arm's own alias binds
+                # to the sealed root type itself, un-narrowed (see
+                # check_sealed_match's own comment on why this went
+                # unnoticed until now): `temp` is already exactly that
+                # pointer type, so no cast is needed, just a plain alias.
+                match arm.pattern as p2:
+                    case WildcardPattern:
+                        match subject_alias as alias_name2:
+                            case str:
+                                safe_alias2 = c_safe_ident(alias_name2)
+                                prelude = indent + "    " + root + " *" + safe_alias2 + " = " + temp + ";\n"
+                                arm_known[safe_alias2] = ClassType(root)
+                            case none:
+                                pass
+                    case _:
+                        pass
         body = self.codegen_block(arm.body, indent + "    ", arm_known, broken_flag, expected_return)
         return "if (" + tag_check + ") {\n" + prelude + body + "\n" + indent + "}"
 
@@ -2141,13 +2646,34 @@ class Codegen:
             case NoneType:
                 tag_check = temp + ".tag == " + str(union_member_index(subject_type.members, nt2))
             case LType:
-                tag_check = temp + ".tag == " + str(union_member_index(subject_type.members, nt2))
-                match subject_alias as alias_name:
-                    case str:
-                        field_index = union_member_index(subject_type.members, nt2)
-                        safe_alias = c_safe_ident(alias_name)
-                        prelude = indent + "    " + c_type_of(nt2) + " " + safe_alias + " = " + temp + ".v" + str(field_index) + ";\n"
-                        arm_known[safe_alias] = nt2
+                # `nt2` isn't always literally one of `subject_type`'s
+                # own members -- `types.lucid`'s own `LType | none` (a
+                # union whose `LType` member is itself a sealed class
+                # hierarchy) is matched with one arm per *concrete*
+                # subclass (`case ClassType:`, `case ListType:`, ...),
+                # each a subtype of the actual member (`LType`), not the
+                # member itself -- the same "pattern nested one level
+                # deeper than the union's own member set" shape
+                # check_match's own class_assignable_to check now
+                # allows. find_union_member locates that actual member
+                # (here, LType) for the tag check and the union field's
+                # own C type; an explicit downcast narrows the read
+                # value down to `nt2`'s own concrete type, sound only
+                # because the tag check just confirmed which member is
+                # active -- the same reasoning codegen_sealed_match's
+                # own downcast relies on, one level further in.
+                match find_union_member(self.classes, subject_type.members, nt2) as member_type:
+                    case LType:
+                        field_index = union_member_index(subject_type.members, member_type)
+                        tag_check = temp + ".tag == " + str(field_index)
+                        match subject_alias as alias_name:
+                            case str:
+                                safe_alias = c_safe_ident(alias_name)
+                                field_code = temp + ".v" + str(field_index)
+                                prelude = indent + "    " + c_type_of(nt2) + " " + safe_alias + " = " + cast_if_needed(nt2, member_type, field_code) + ";\n"
+                                arm_known[safe_alias] = nt2
+                            case none:
+                                pass
                     case none:
                         pass
             case none:
@@ -2203,9 +2729,11 @@ class Codegen:
                 assign = body_indent + target_name + " = " + arr_name + "[" + idx_name + "];"
                 loop_text = arr_decl + "\n" + loop_open + "\n" + assign + "\n" + body + "\n" + header_indent + "}"
             case Call:
+                is_range_call = false
                 match it.func as callee:
                     case Ident:
                         if callee.name == "range":
+                            is_range_call = true
                             start_code = "0"
                             stop_code = "0"
                             if len(it.args) == 1:
@@ -2232,26 +2760,91 @@ class Codegen:
                             loop_text = decls + "\n" + loop_open + "\n" + assign + "\n" + body + "\n" + header_indent + "}"
                     case _:
                         pass
+                if not is_range_call:
+                    # `for n in sorted_names(result.members):`
+                    # (`types.lucid`'s own `mangle_component`) -- any
+                    # other call (not `range`), whose own return type is
+                    # a list[T]/set[T]/dict[str, T], is iterated exactly
+                    # like the general (non-Call, non-literal) case just
+                    # below -- this used to leave `loop_text` as the
+                    # "unsupported" placeholder for anything but `range`.
+                    match self.infer_expr_type(node.iterable, known) as ctype:
+                        case ListType:
+                            csuffix = str(node.span.line) + "_" + str(node.span.column)
+                            clist_var = "__lucid_for_list_" + csuffix
+                            cidx_name = "__lucid_for_i_" + csuffix
+                            citerable_code = self.codegen_expr(node.iterable, known)
+                            clist_ctype = "lucid_list_" + mangle_component(ctype.element_type) + " *"
+                            cdecl = header_indent + clist_ctype + " " + clist_var + " = " + citerable_code + ";"
+                            cloop_open = header_indent + "for (long " + cidx_name + " = 0; " + cidx_name + " < " + clist_var + "->len; " + cidx_name + "++) {"
+                            cassign = body_indent + target_name + " = " + clist_var + "->items[" + cidx_name + "];"
+                            loop_text = cdecl + "\n" + cloop_open + "\n" + cassign + "\n" + body + "\n" + header_indent + "}"
+                        case SetType:
+                            csuffix2 = str(node.span.line) + "_" + str(node.span.column)
+                            cset_var = "__lucid_for_set_" + csuffix2
+                            cidx_name2 = "__lucid_for_i_" + csuffix2
+                            citerable_code2 = self.codegen_expr(node.iterable, known)
+                            cset_ctype = "lucid_set_" + mangle_component(ctype.element_type) + " *"
+                            cdecl2 = header_indent + cset_ctype + " " + cset_var + " = " + citerable_code2 + ";"
+                            cloop_open2 = header_indent + "for (long " + cidx_name2 + " = 0; " + cidx_name2 + " < " + cset_var + "->len; " + cidx_name2 + "++) {"
+                            cassign2 = body_indent + target_name + " = " + cset_var + "->items[" + cidx_name2 + "];"
+                            loop_text = cdecl2 + "\n" + cloop_open2 + "\n" + cassign2 + "\n" + body + "\n" + header_indent + "}"
+                        case DictType:
+                            csuffix3 = str(node.span.line) + "_" + str(node.span.column)
+                            cdict_var = "__lucid_for_dict_" + csuffix3
+                            cidx_name3 = "__lucid_for_i_" + csuffix3
+                            citerable_code3 = self.codegen_expr(node.iterable, known)
+                            cdict_ctype = "lucid_dict_str_" + mangle_component(ctype.value_type) + " *"
+                            cdecl3 = header_indent + cdict_ctype + " " + cdict_var + " = " + citerable_code3 + ";"
+                            cloop_open3 = header_indent + "for (long " + cidx_name3 + " = 0; " + cidx_name3 + " < " + cdict_var + "->len; " + cidx_name3 + "++) {"
+                            cassign3 = body_indent + target_name + " = " + cdict_var + "->keys[" + cidx_name3 + "];"
+                            loop_text = cdecl3 + "\n" + cloop_open3 + "\n" + cassign3 + "\n" + body + "\n" + header_indent + "}"
+                        case _:
+                            pass
             case _:
-                # A list[T]-typed value that isn't a literal in this
-                # `for` -- a variable, a field, a call -- iterated by
-                # index over its own `->len`/`->items`, evaluated once
-                # into a hoisted pointer (matching how `range(...)`'s
-                # bounds are hoisted above: the iterable expression, if
-                # it has any side effect, shouldn't run once per
-                # iteration).
-                match self.infer_for_iterable_element_type(node.iterable, known) as et:
-                    case LType:
+                # A list[T]/set[T]-typed value, or a dict[str, T]'s own
+                # keys, that isn't a literal in this `for` -- a variable,
+                # a field, a call -- iterated by index over the
+                # underlying struct's own `->len` plus `->items` (list,
+                # set) or `->keys` (dict, self-host/checker.lucid's own
+                # dominant `for cname in self.classes:` shape, once
+                # class/list-valued dicts made this a real need),
+                # evaluated once into a hoisted pointer (matching how
+                # `range(...)`'s bounds are hoisted above: the iterable
+                # expression, if it has any side effect, shouldn't run
+                # once per iteration).
+                match self.infer_expr_type(node.iterable, known) as rtype:
+                    case ListType:
                         suffix = str(node.span.line) + "_" + str(node.span.column)
                         list_var = "__lucid_for_list_" + suffix
                         idx_name = "__lucid_for_i_" + suffix
                         iterable_code = self.codegen_expr(node.iterable, known)
-                        list_ctype = "lucid_list_" + mangle_component(et) + " *"
+                        list_ctype = "lucid_list_" + mangle_component(rtype.element_type) + " *"
                         decl = header_indent + list_ctype + " " + list_var + " = " + iterable_code + ";"
                         loop_open = header_indent + "for (long " + idx_name + " = 0; " + idx_name + " < " + list_var + "->len; " + idx_name + "++) {"
                         assign = body_indent + target_name + " = " + list_var + "->items[" + idx_name + "];"
                         loop_text = decl + "\n" + loop_open + "\n" + assign + "\n" + body + "\n" + header_indent + "}"
-                    case none:
+                    case SetType:
+                        suffix2 = str(node.span.line) + "_" + str(node.span.column)
+                        set_var = "__lucid_for_set_" + suffix2
+                        idx_name2 = "__lucid_for_i_" + suffix2
+                        iterable_code2 = self.codegen_expr(node.iterable, known)
+                        set_ctype = "lucid_set_" + mangle_component(rtype.element_type) + " *"
+                        decl2 = header_indent + set_ctype + " " + set_var + " = " + iterable_code2 + ";"
+                        loop_open2 = header_indent + "for (long " + idx_name2 + " = 0; " + idx_name2 + " < " + set_var + "->len; " + idx_name2 + "++) {"
+                        assign2 = body_indent + target_name + " = " + set_var + "->items[" + idx_name2 + "];"
+                        loop_text = decl2 + "\n" + loop_open2 + "\n" + assign2 + "\n" + body + "\n" + header_indent + "}"
+                    case DictType:
+                        suffix3 = str(node.span.line) + "_" + str(node.span.column)
+                        dict_var = "__lucid_for_dict_" + suffix3
+                        idx_name3 = "__lucid_for_i_" + suffix3
+                        iterable_code3 = self.codegen_expr(node.iterable, known)
+                        dict_ctype = "lucid_dict_str_" + mangle_component(rtype.value_type) + " *"
+                        decl3 = header_indent + dict_ctype + " " + dict_var + " = " + iterable_code3 + ";"
+                        loop_open3 = header_indent + "for (long " + idx_name3 + " = 0; " + idx_name3 + " < " + dict_var + "->len; " + idx_name3 + "++) {"
+                        assign3 = body_indent + target_name + " = " + dict_var + "->keys[" + idx_name3 + "];"
+                        loop_text = decl3 + "\n" + loop_open3 + "\n" + assign3 + "\n" + body + "\n" + header_indent + "}"
+                    case _:
                         pass
 
         if has_if_broken:
@@ -2292,6 +2885,10 @@ class Codegen:
                         case Attribute:
                             # A field write, not a local -- nothing to
                             # hoist a declaration for.
+                            pass
+                        case Index:
+                            # A dict item write (`known[name] = t`) --
+                            # same as Attribute, not a local.
                             pass
                         case _:
                             names.add(self.ident_target_name(result.target))
@@ -2356,6 +2953,8 @@ class Codegen:
                 case Assignment:
                     match result.target as target:
                         case Attribute:
+                            pass
+                        case Index:
                             pass
                         case _:
                             match self.infer_expr_type(result.value, known) as it:
@@ -2422,11 +3021,93 @@ class Codegen:
                 case MatchStmt:
                     # Same reasoning as collect_local_names's own
                     # MatchStmt case -- the subject_alias isn't an
-                    # ordinary local here either.
-                    for arm in result.arms:
-                        self.infer_local_types(arm.body, known)
+                    # ordinary local here either. But unlike
+                    # collect_local_names (which only needs *names*),
+                    # this pre-pass needs each arm's own alias correctly
+                    # *typed* too, mirroring what codegen_match_arm/
+                    # codegen_sealed_match_arm actually bind at codegen
+                    # time -- otherwise any later local inferred from an
+                    # expression built on the alias (`for m in
+                    # it.members:` inside a `case UnionLType:` arm,
+                    # types.lucid's own dominant shape) silently falls
+                    # back to `long`, a real, previously-undiscovered
+                    # gap this subset's own `infer_local_types` had from
+                    # the start -- masked until checker.lucid/
+                    # types.lucid's own sources, which lean on this
+                    # shape constantly, started compiling through this
+                    # pipeline. Set directly on `known` (not a copy),
+                    # mirroring how a plain `for` loop's own target
+                    # already works just above -- an alias is never
+                    # itself hoisted as a separate C local (see
+                    # codegen_match_arm's own comment), so there's
+                    # nothing to preserve across arms.
+                    match self.infer_expr_type(result.subject, known) as subject_t:
+                        case LType:
+                            for arm in result.arms:
+                                match self.arm_narrowed_type(subject_t, arm.pattern) as narrowed4:
+                                    case NoneType:
+                                        # `case none:` never binds its own
+                                        # alias (see check_match's own
+                                        # rule -- 'none' isn't a value
+                                        # this subset can bind a name to
+                                        # at all), the same reason
+                                        # codegen_match_arm's own
+                                        # NoneType case never emits a
+                                        # prelude either. Binding it here
+                                        # anyway (a real bug in this
+                                        # fix's own first version) left a
+                                        # LATER `case none:` arm's own
+                                        # unrelated alias name silently
+                                        # overwritten to NoneType in
+                                        # `known`, for the rest of the
+                                        # pre-pass -- caught by
+                                        # checker.lucid's own check_call,
+                                        # which reuses the name `at`
+                                        # across a `case Attribute:` arm
+                                        # sibling to the one that
+                                        # actually needed it typed.
+                                        pass
+                                    case LType:
+                                        match result.subject_alias as alias4:
+                                            case str:
+                                                known[c_safe_ident(alias4)] = narrowed4
+                                            case none:
+                                                pass
+                                    case none:
+                                        pass
+                                self.infer_local_types(arm.body, known)
+                        case none:
+                            for arm in result.arms:
+                                self.infer_local_types(arm.body, known)
                 case _:
                     pass
+
+    # The type an arm's own alias narrows to, mirroring codegen_match_arm
+    # (a union subject) and codegen_sealed_match_arm (a sealed-class
+    # subject, where a wildcard arm binds the root type itself, unnarrowed
+    # -- see check_sealed_match's own comment on why) -- used only by
+    # infer_local_types' own MatchStmt case, to correctly type-infer any
+    # local declared from an expression built on the alias.
+    def arm_narrowed_type(self, subject_type: LType, pat: Pattern) -> LType | none:
+        match subject_type as st:
+            case UnionLType:
+                match pat as p:
+                    case TypePattern:
+                        return resolve_type_expr(p.type_expr)
+                    case LiteralPattern:
+                        return NoneType()
+                    case _:
+                        return none
+            case ClassType:
+                match pat as p2:
+                    case TypePattern:
+                        return resolve_type_expr(p2.type_expr)
+                    case WildcardPattern:
+                        return st
+                    case _:
+                        return none
+            case _:
+                return none
 
     # Shared by codegen_function and codegen_entry_point: two passes --
     # first learn every local's type (needed since a local can be used,
@@ -2583,12 +3264,9 @@ class Codegen:
             match self.functions.signatures.get(name, none) as sigs:
                 case list[FuncSig]:
                     for sig in sigs:
-                        match sig.return_type as rt:
-                            case UnionLType:
-                                if not union_already_found(found, rt):
-                                    found.append(rt)
-                            case _:
-                                pass
+                        self.note_union_type(sig.return_type, found)
+                        for pt in sig.param_types:
+                            self.note_union_type(pt, found)
                 case none:
                     pass
         for cname in self.classes:
@@ -2597,24 +3275,127 @@ class Codegen:
                     for mname in cls.methods:
                         match cls.methods.get(mname, none) as sig:
                             case FuncSig:
-                                match sig.return_type as rt:
-                                    case UnionLType:
-                                        if not union_already_found(found, rt):
-                                            found.append(rt)
-                                    case _:
-                                        pass
+                                self.note_union_type(sig.return_type, found)
+                                for pt in sig.param_types:
+                                    self.note_union_type(pt, found)
                             case none:
                                 pass
                     for f in cls.fields:
-                        match f.field_type as ft:
-                            case UnionLType:
-                                if not union_already_found(found, ft):
-                                    found.append(ft)
-                            case _:
-                                pass
+                        self.note_union_type(f.field_type, found)
                 case none:
                     pass
         return sort_union_types(found)
+
+    # `expected_return: LType | none` (checker.lucid's own dominant
+    # union-typed *parameter*, once a function/method parameter's type
+    # was allowed to be a union at all -- see method_signature_for/
+    # collect_function_signature) needs its own tagged struct exactly
+    # like a union return type or field does -- collect_union_types'
+    # own scan didn't look at param_types at all before, only
+    # return_type, since nothing compiled through this pipeline had a
+    # union-typed parameter yet.
+    def note_union_type(self, t: LType, found: list[UnionLType]):
+        match t as ut:
+            case UnionLType:
+                if not union_already_found(found, ut):
+                    found.append(ut)
+            case _:
+                pass
+
+    # Every dict[str, V] value type registered anywhere -- function/
+    # method signatures, class fields, and (like collect_var_union_types)
+    # every VarDef's own declared type -- deduplicated by types_equal.
+    # Only a ListType value type actually needs its own call to
+    # emit_dict_type here (see codegen_module's own call site); a
+    # ClassType one is already covered unconditionally, the same way
+    # every class's own list type is.
+    def collect_dict_value_types(self, all_decls: list[Stmt]) -> list[LType]:
+        found: list[LType] = []
+        for name in self.functions.signatures:
+            match self.functions.signatures.get(name, none) as sigs:
+                case list[FuncSig]:
+                    for sig in sigs:
+                        self.note_dict_value_type(sig.return_type, found)
+                        for pt in sig.param_types:
+                            self.note_dict_value_type(pt, found)
+                case none:
+                    pass
+        for cname in self.classes:
+            match self.classes.get(cname, none) as cls:
+                case ClassSig:
+                    for mname in cls.methods:
+                        match cls.methods.get(mname, none) as sig:
+                            case FuncSig:
+                                self.note_dict_value_type(sig.return_type, found)
+                                for pt in sig.param_types:
+                                    self.note_dict_value_type(pt, found)
+                            case none:
+                                pass
+                    for f in cls.fields:
+                        self.note_dict_value_type(f.field_type, found)
+                case none:
+                    pass
+        self.collect_var_dict_value_types(all_decls, found)
+        return found
+
+    def note_dict_value_type(self, t: LType, found: list[LType]):
+        match t as dt:
+            case DictType:
+                already = false
+                for f in found:
+                    if types_equal(f, dt.value_type):
+                        already = true
+                if not already:
+                    found.append(dt.value_type)
+            case _:
+                pass
+
+    def collect_var_dict_value_types(self, stmts: list[Stmt], found: list[LType]):
+        for s in stmts:
+            match s as result:
+                case VarDef:
+                    match resolve_type_expr(result.type_annotation) as t:
+                        case LType:
+                            self.note_dict_value_type(t, found)
+                        case none:
+                            pass
+                case FunctionStmt:
+                    self.collect_var_dict_value_types(result.function.body, found)
+                case ClassDef:
+                    for member in result.body:
+                        match member as m:
+                            case MethodMember:
+                                self.collect_var_dict_value_types(m.method.body, found)
+                            case _:
+                                pass
+                case If:
+                    self.collect_var_dict_value_types(result.then_branch, found)
+                    for branch in result.elif_branches:
+                        self.collect_var_dict_value_types(branch.body, found)
+                    match result.else_branch as else_body:
+                        case list[Stmt]:
+                            self.collect_var_dict_value_types(else_body, found)
+                        case none:
+                            pass
+                case While:
+                    self.collect_var_dict_value_types(result.body, found)
+                    match result.if_broken_body as broken_body:
+                        case list[Stmt]:
+                            self.collect_var_dict_value_types(broken_body, found)
+                        case none:
+                            pass
+                case For:
+                    self.collect_var_dict_value_types(result.body, found)
+                    match result.if_broken_body as broken_body:
+                        case list[Stmt]:
+                            self.collect_var_dict_value_types(broken_body, found)
+                        case none:
+                            pass
+                case MatchStmt:
+                    for arm in result.arms:
+                        self.collect_var_dict_value_types(arm.body, found)
+                case _:
+                    pass
 
     def codegen_module(self, stmts: list[Stmt]) -> str:
         # Everything `stmts`' own `from .x import ...` statements pull
@@ -2696,11 +3477,15 @@ class Codegen:
         parts.append("")
         parts.append(emit_list_type(StrType()))
         parts.append("")
+        parts.append(sorted_str_prelude)
+        parts.append("")
         parts.append(emit_dict_type(IntType()))
         parts.append("")
         parts.append(emit_dict_type(BoolType()))
         parts.append("")
         parts.append(emit_dict_type(StrType()))
+        parts.append("")
+        parts.append(emit_set_type(StrType()))
         parts.append("")
         # `lucid_list_<ClassName>` for every class, before any union type
         # or full class struct body -- a union member can itself be
@@ -2719,8 +3504,42 @@ class Codegen:
                         case ClassSig:
                             parts.append(emit_list_type(ClassType(cls.name)))
                             parts.append("")
+                            # `lucid_dict_str_<ClassName>`, unconditionally
+                            # for every class, the same reasoning as the
+                            # per-class list type right above -- cheap,
+                            # and self-host/checker.lucid's own `classes:
+                            # dict[str, ClassSig]`/`known: dict[str,
+                            # LType]` (and every other `dict[str,
+                            # SomeClass]`) needs its value type's own
+                            # dict struct to exist somewhere; scanning
+                            # which classes are *actually* used as a
+                            # dict value (the same way the union-type
+                            # scan below has to, since a union's own
+                            # member set isn't "every class") would only
+                            # save a few unused struct definitions here.
+                            parts.append(emit_dict_type(ClassType(cls.name)))
+                            parts.append("")
                         case none:
                             pass
+                case _:
+                    pass
+        # A `dict[str, list[T]]` value type (types.lucid's own
+        # `FuncTable.signatures: dict[str, list[FuncSig]]`) isn't covered
+        # by either the primitive or the per-class dict emission above --
+        # collected the same way collect_var_union_types finds a
+        # local-only union type, by walking every function/method body
+        # and the module's own top-level statements for a VarDef's own
+        # declared type, plus every registered signature/field
+        # (collect_declarations already built these tables, so no second
+        # walk needed for that half). Emitted after the per-class list
+        # types above, since a list-valued dict needs its own element's
+        # list struct to already exist.
+        all_dict_value_types = self.collect_dict_value_types(all_decls)
+        for dt in all_dict_value_types:
+            match dt as dtt:
+                case ListType:
+                    parts.append(emit_dict_type(dtt))
+                    parts.append("")
                 case _:
                     pass
         # Every union type any registered function/method signature or
@@ -2743,6 +3562,26 @@ class Codegen:
         # reproducibility reason as the module-level globals below.
         all_union_types = self.collect_union_types()
         self.collect_var_union_types(all_decls, all_union_types)
+        # `d.get(key, none)` on any `dict[str, V]` (checker.lucid's own
+        # dominant `.get()` shape once dict[str, V].get() started
+        # returning `V | none` for a `none` default -- see check_call's
+        # own DictType case) synthesizes a `V | none` union that never
+        # appears as an explicit return type, field, or VarDef annotation
+        # anywhere in the source -- neither collect_union_types nor
+        # collect_var_union_types can find it. Registering `V | none` for
+        # every distinct dict value type found above is an
+        # over-approximation (a dict that's only ever read with a
+        # same-typed default, never `none`, gets an unused union struct
+        # too) rather than walking every expression in the module for an
+        # actual `.get(key, none)` call site -- harmless, and far simpler
+        # than a second full expression-tree walk.
+        for dvt in all_dict_value_types:
+            opt_dict_members: list[LType] = []
+            opt_dict_members.append(dvt)
+            opt_dict_members.append(NoneType())
+            opt_dict_union = UnionLType(opt_dict_members)
+            if not union_already_found(all_union_types, opt_dict_union):
+                all_union_types.append(opt_dict_union)
         for u in sort_union_types(all_union_types):
             parts.append(emit_union_type(u.members))
             parts.append("")
