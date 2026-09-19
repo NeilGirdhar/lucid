@@ -1,0 +1,112 @@
+sealed class Shape:
+    pass
+
+class Circle(Shape):
+    r: int
+
+class Square(Shape):
+    side: int
+
+def area(s: Shape) -> int:
+    match s as v:
+        case Circle:
+            return v.r * v.r
+        case Square:
+            return v.side * v.side
+
+def float_ops(x: float, y: float) -> str:
+    total = x + y
+    diff = x - y
+    prod = x * y
+    quot = x / y
+    return str(total) + "," + str(diff) + "," + str(prod) + "," + str(quot)
+
+def compare_floats(x: float, y: float) -> str:
+    parts: list[str] = []
+    if x < y:
+        parts.append("lt")
+    if x <= y:
+        parts.append("le")
+    if x > y:
+        parts.append("gt")
+    if x >= y:
+        parts.append("ge")
+    if x == y:
+        parts.append("eq")
+    if x != y:
+        parts.append("ne")
+    result = ""
+    for p in parts:
+        result = result + p + " "
+    return result
+
+def int_div(a: int, b: int) -> float:
+    return a / b
+
+def power(a: int, b: int) -> int:
+    return a ** b
+
+def bump_first(xs: list[int]) -> list[int]:
+    xs[0] = xs[0] + 100
+    return xs
+
+def to_str_bool(b: bool) -> str:
+    return str(b)
+
+def to_int_float(f: float) -> int:
+    return int(f)
+
+def to_float_int(n: int) -> float:
+    return float(n)
+
+def count_entries(d: dict[str, int]) -> int:
+    return len(d)
+
+class Item:
+    value: int
+
+class ItemError:
+    message: str
+
+def maybe(n: int) -> Item | none | ItemError:
+    if n < 0:
+        return ItemError("negative")
+    if n == 0:
+        return none
+    return Item(n)
+
+def describe(n: int) -> str | ItemError:
+    match maybe(n)? as v:
+        case Item:
+            return "item:" + str(v.value)
+        case none:
+            return "none"
+
+def ok() -> int:
+    print(area(Circle(3)))
+    print(area(Square(4)))
+    print(float_ops(3.5, 1.5))
+    print(compare_floats(1.5, 2.5))
+    print(int_div(7, 2))
+    print(power(2, 10))
+    xs: list[int] = [1, 2, 3]
+    ys = bump_first(xs)
+    print(ys[0])
+    print(to_str_bool(true))
+    print(to_int_float(3.7))
+    print(to_float_int(5))
+    d: dict[str, int] = {"a": 1, "b": 2, "c": 3}
+    print(count_entries(d))
+    match describe(5) as r1:
+        case str:
+            print(r1)
+        case ItemError:
+            print("err:" + r1.message)
+    match describe(0) as r2:
+        case str:
+            print(r2)
+        case ItemError:
+            print("err:" + r2.message)
+    return 0
+
+print(ok())

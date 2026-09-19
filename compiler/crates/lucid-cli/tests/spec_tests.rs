@@ -938,6 +938,53 @@ fn test_native_local_from_imports() {
 }
 
 #[test]
+fn test_native_local_from_imports_construct_class() {
+    // test_native_local_from_imports above only imports a function and a
+    // plain variable, so it never exercised constructing an *imported
+    // class* -- the checker treated every from-import as Any regardless of
+    // what it named, so `Circle(...)` for an imported `Circle` failed with
+    // "unknown enclosing class" even though `lucid check` on the same
+    // project passed.
+    use std::fs;
+    use std::process::Command;
+    let temp_dir =
+        std::env::temp_dir().join(format!("lucid_native_imports_class_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let shapes_path = temp_dir.join("shapes.lucid");
+    let main_path = temp_dir.join("main.lucid");
+    let output_path = temp_dir.join("main_bin");
+    fs::write(
+        &shapes_path,
+        "sealed class Shape:\n    pass\nclass Circle(Shape):\n    radius: float\n    def area(self) -> float:\n        return 3.0 * self.radius * self.radius\ndef describe(s: Shape) -> str:\n    match s as result:\n        case Circle:\n            return \"circle\"\n",
+    )
+    .unwrap();
+    fs::write(
+        &main_path,
+        "from .shapes import Circle, describe\nc = Circle(2.0)\nprint(c.area())\nprint(describe(c))\n",
+    )
+    .unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args([
+            "build",
+            main_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "native import build failed");
+    let run = Command::new(&output_path).output().unwrap();
+    assert!(
+        run.status.success(),
+        "native import program failed: {:?}",
+        run
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "12\ncircle\n");
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn test_native_declaration_only_import_cycle() {
     use std::fs;
     use std::process::Command;
@@ -1013,5 +1060,466 @@ fn test_spec_command_exits_zero_when_all_snippets_validate() {
         "test-spec should pass when every positive snippet validates: {}",
         String::from_utf8_lossy(&output.stdout)
     );
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+/// self-host/*.lucid (a lexer, parser, and interpreter, all written in
+/// Lucid) is the only coverage for itself -- these files aren't part of
+/// the checker/runtime test suite, so a runtime regression here (like
+/// the `?`-inside-a-nested-expression bug this ran into) would otherwise
+/// only surface if someone remembered to run the demos by hand. `lucid
+/// run` on each demo, from the repo root (they read their own sibling
+/// files by a `self-host/...`-relative path), checking the interpreter
+/// exits zero and the differential checks in each demo's own output
+/// actually report success -- not just "didn't crash".
+#[test]
+fn self_hosted_lexer_demo_tokenizes_its_own_source() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/lexer_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "lexer_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("self-tokenize succeeded"),
+        "lexer_demo.lucid should report self-tokenizing lexer.lucid's own source: {stdout}"
+    );
+}
+
+#[test]
+fn self_hosted_ast_demo_builds_and_walks_an_expression_tree() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/ast_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "ast_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("(1 + (x * 2))"),
+        "ast_demo.lucid should print the hand-built expression tree: {stdout}"
+    );
+}
+
+#[test]
+fn self_hosted_parser_demo_parses_its_own_source() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/parser_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "parser_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("self-parse succeeded"),
+        "parser_demo.lucid should report self-parsing lexer.lucid's own source: {stdout}"
+    );
+}
+
+#[test]
+fn self_hosted_interpreter_demo_runs_and_reports_errors() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/interpreter_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "interpreter_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("fib(9) = 34"),
+        "interpreter_demo.lucid's fibonacci program should compute fib(9) = 34: {stdout}"
+    );
+    assert!(
+        stdout.contains("7! = 5040"),
+        "interpreter_demo.lucid's factorial program should compute 7! = 5040: {stdout}"
+    );
+    assert!(
+        stdout.contains("EVAL ERROR (expected): undefined variable 'undefined_name'"),
+        "interpreter_demo.lucid's fourth program should report the expected undefined-variable error: {stdout}"
+    );
+}
+
+#[test]
+fn self_hosted_checker_demo_catches_every_kind_of_error() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/checker_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "checker_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected in [
+        "--- clean program ---\n(no errors)",
+        "--- clean program with classes and dispatch ---\n(no errors)",
+        "ERROR: undefined name 'missing'",
+        "ERROR: undefined function 'not_a_real_function'",
+        "ERROR: no overload of 'add' matches the given argument types",
+        "ERROR: duplicate function 'dup'",
+        "ERROR: function 'bad' has an unsupported return type",
+        "ERROR: unknown class 'NotAClass'",
+        "ERROR: construct for 'Point' expects 2 field value(s), got 1",
+        "ERROR: field 'y' expects int, got str",
+        "ERROR: 'Point' has no field 'z'",
+        "ERROR: no '__add__' overload for (Point, int)",
+        "ERROR: construct arguments must be positional (no name=value form)",
+        "--- for over a list literal, and range ---\n(no errors)",
+        "--- for/while with if_broken ---\n(no errors)",
+        "ERROR: list literal elements must all have the same type in this subset",
+        "ERROR: unsupported iterable expression in this subset (only a list literal, a list[T]/set[T] value, a dict[str, T] value, or range(...) is supported)",
+        "ERROR: range(...) supports only one or two arguments in this subset",
+        "--- print() of a class with int/bool/str fields is supported ---\n(no errors)",
+        "ERROR: print() of a 'Outer' value is not supported in this subset",
+        "ERROR: freeze() is not supported in this subset",
+        "--- str + str is supported (str concatenation) ---\n(no errors)",
+        "ERROR: operator SUB requires two int or two float operands, got str and str",
+        "--- str == str and str < str are supported ---\n(no errors)",
+        "ERROR: operator EQ is not supported on (int, bool) in this subset",
+        "ERROR: operator ADD requires two int or two float operands, got bool and int",
+        "ERROR: operator AND requires two bool operands, got int and int",
+        "ERROR: operator NOT requires a bool operand, got int",
+        "ERROR: operator NEG requires an int operand, got bool",
+        "ERROR: variable 'x' declared as int but initialized with str",
+        "ERROR: 'x' cannot change type from int to str in this subset",
+        "ERROR: 'x' cannot change type from int to bool in this subset",
+        "ERROR: return type mismatch: expected int, got str",
+        "ERROR: bare return is not supported in this subset",
+        "ERROR: return statement outside a function",
+        "ERROR: if condition must be bool, got int",
+        "ERROR: while condition must be bool, got str",
+        "--- an omitted return type means -> none ---\n(no errors)",
+        "ERROR: return type mismatch: expected none, got int",
+        "ERROR: function 'bad' can fall off its end without returning a int",
+        "--- if/elif/else that all return still passes ---\n(no errors)",
+        "ERROR: break statement outside a loop",
+        "ERROR: continue statement outside a loop",
+        "--- break in a nested loop's if_broken re-breaking the outer loop still passes ---\n(no errors)",
+        "ERROR: cannot redefine builtin 'len' in this subset",
+        "--- string indexing is supported ---\n(no errors)",
+        "ERROR: indexing is only supported on str/list[T]/dict[str, T] in this subset",
+        "ERROR: string index must be int, got str",
+        "--- typed empty list, append, index, and len are supported ---\n(no errors)",
+        "ERROR: list.append() requires a single argument of type int",
+        "cannot infer the element type of an empty list literal in this subset",
+        "ERROR: print() of a list value is not supported in this subset",
+        "ERROR: cannot determine the type of 'xs'",
+        "--- a list-typed class field is supported ---\n(no errors)",
+        "ERROR: print() of a 'Bag' value is not supported in this subset (it has a field whose type is itself a class or a list)",
+        "--- attribute assignment is supported ---\n(no errors)",
+        "ERROR: field 'x' expects int, got str",
+        "ERROR: 'P' has no field 'z'",
+        "ERROR: attribute assignment is only supported on a class value in this subset",
+        "ERROR: 'x' cannot be bound to a none-typed value in this subset",
+        "ERROR: print() of a none-typed value is not supported in this subset",
+        "ERROR: parameter 'x' has an unsupported type (none isn't a valid parameter type)",
+        "ERROR: field 'x' has an unsupported type (none isn't a valid field type)",
+        "--- a method reading and mutating self's fields is supported ---\n(no errors)",
+        "--- a method calling another method is supported ---\n(no errors)",
+        "ERROR: method 'foo' must take 'self' as its first parameter",
+        "ERROR: method 'foo' has an unsupported 'self' parameter",
+        "ERROR: 'P' has no method 'unknown_method'",
+        "ERROR: method 'add' on 'Adder' does not match the given argument types",
+        "ERROR: duplicate method 'foo' in class 'Bad'",
+        "--- list.pop() is supported ---\n(no errors)",
+        "ERROR: list.pop() takes no arguments in this subset",
+        "--- dict[str, V] literal and .get() are supported ---\n(no errors)",
+        "--- empty dict[str, V] literal with a declared type is supported ---\n(no errors)",
+        "cannot infer the value type of an empty dict literal in this subset",
+        "ERROR: dict literal keys must be str in this subset, got int",
+        "ERROR: dict.get() requires (str, int) arguments, or (str, none), in this subset",
+        "ERROR: print() of a dict value is not supported in this subset",
+        "--- a module-level variable is readable inside a function ---\n(no errors)",
+        "--- a module-level variable is readable inside a class method ---\n(no errors)",
+        "--- a local assignment shadows a module-level name of the same type ---\n(no errors)",
+        "--- a method returning T | none, narrowed by match, is supported ---\n(no errors)",
+        "--- a method returning T | ErrorClass, narrowed by match, is supported ---\n(no errors)",
+        "--- '?' propagation is supported ---\n(no errors)",
+        "--- '?' propagation as a return statement's own value is supported ---\n(no errors)",
+        "--- '?' propagation as a bare expression statement is supported ---\n(no errors)",
+        "--- a local variable can be bound directly to a union-typed value ---\n(no errors)",
+        "--- an empty list literal as a constructor argument infers from the field's declared type ---\n(no errors)",
+        "--- a union-typed field is supported ---\n(no errors)",
+        "ERROR: print() of a 'Holder' value is not supported in this subset",
+        "--- a union-typed parameter with no call site is still just supported, not exercised ---\n(no errors)",
+        "ERROR: print() of a union-typed value is not supported in this subset",
+        "ERROR: '?' is only supported on a union return type in this subset",
+        "ERROR: '?' requires a union type with exactly one error variant (a class whose name ends in 'Error') in this subset",
+        "--- '?' on a union with more than one non-error member is supported ---\n(no errors)",
+        "ERROR: '?' propagates ItemError, but the enclosing function's return type (int) doesn't include it",
+        "ERROR: '?' used outside a function",
+        "--- '?' as a Binary operand is supported (hoisted ahead of the statement) ---\n(no errors)",
+        "--- '?' as a Call argument is supported (hoisted ahead of the statement) ---\n(no errors)",
+        "ERROR: '?' is only supported as the direct right-hand side of a plain assignment, the direct value of a return statement, or a bare expression statement on its own, in this subset",
+        "ERROR: match on int is not supported in this subset (only a union-typed subject, or one belonging to a sealed class hierarchy, can be matched)",
+        "ERROR: match on Item | none is not exhaustive: no case for none",
+        "ERROR: a match arm guard ('if ...') is not supported in this subset",
+        "ERROR: pattern type Other is not part of Item | none",
+        "--- a name declared as a union type can be reassigned a narrower member, and back ---\n(no errors)",
+        "ERROR: 'x' cannot change type from Item to Item | none in this subset",
+        "--- a class imported from another self-host/ file is a known type ---\n(no errors)",
+        "--- a subclass's Construct call takes the parent's own fields first, then its own ---\n(no errors)",
+        "--- a subclass value satisfies a base-class-typed return ---\n(no errors)",
+        "--- a subclass value satisfies a base-class-containing union return ---\n(no errors)",
+        "ERROR: construct for 'NumberNode' expects 2 field value(s), got 1",
+        "ERROR: class 'Bad' has more than one base -- only a single class parent is supported in this subset (no traits)",
+        "ERROR: return type mismatch: expected Node, got Other",
+        "--- matching a sealed class hierarchy by its own concrete subclasses is supported ---\n(no errors)",
+        "--- a subtype value satisfies a plain function's base-class-typed parameter ---\n(no errors)",
+        "--- a subtype value satisfies a list.append() base-class-typed element type ---\n(no errors)",
+        "ERROR: pattern type Other is not part of the same sealed class hierarchy as 'Node'",
+        "--- a sealed class hierarchy match without a trailing wildcard, covering every concrete subclass, is supported ---\n(no errors)",
+        "ERROR: match on 'Node' is not exhaustive: no case for 'NameNode'",
+        "--- a union return type that's a strict subset of another is supported ---\n(no errors)",
+        "--- a union-typed parameter is supported ---\n(no errors)",
+        "--- dict item assignment is supported, including overwriting an existing key ---\n(no errors)",
+        "ERROR: list index must be int, got str",
+        "ERROR: index assignment is only supported on dict[str, T]/list[T] in this subset",
+        "--- a direct dict[str, T] index read is supported ---\n(no errors)",
+        "--- set[str] with add() and in/not in is supported ---\n(no errors)",
+        "ERROR: set.add() requires a single argument of type str",
+        "--- str.endswith() is supported ---\n(no errors)",
+        "ERROR: str.endswith() requires a single str argument in this subset",
+        "--- sorted() on a list[str] is supported ---\n(no errors)",
+        "ERROR: sorted() supports only a single list[str] argument in this subset",
+        "ERROR: operator EQ is not supported on (str | none, int) in this subset",
+        "--- for-loop iteration over a dict's own keys is supported ---\n(no errors)",
+        "--- for-loop iteration over an arbitrary call's own list return value is supported ---\n(no errors)",
+        "--- str.replace() is supported ---\n(no errors)",
+        "ERROR: str.replace() requires two str arguments in this subset",
+        "--- bidirectional empty-literal inference for a method-call argument is supported ---\n(no errors)",
+        "--- float arithmetic and comparison operators are supported ---\n(no errors)",
+        "ERROR: operator ADD requires two int or two float operands, got float and int",
+        "--- / (true division) is supported on two ints or two floats ---\n(no errors)",
+        "ERROR: operator DIV requires two int or two float operands, got float and int",
+        "--- ** (power) is supported on two ints ---\n(no errors)",
+        "ERROR: operator POW requires two int operands, got float and int",
+        "--- list[T] index assignment is supported ---\n(no errors)",
+        "ERROR: list item expects int, got str",
+        "--- str(bool)/int(float)/float(int) conversions are supported ---\n(no errors)",
+        "--- len() on a dict[str, T] is supported ---\n(no errors)",
+        "--- '?' as a match statement's own subject is supported ---\n(no errors)",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "checker_demo.lucid should report {expected:?}: {stdout}"
+        );
+    }
+}
+
+/// Slow: loads and interprets lexer.lucid, then loads and interprets
+/// ast.lucid + lexer.lucid + parser.lucid together and runs parser.lucid's
+/// own parse() through the self-hosted interpreter -- several minutes
+/// under a debug build (see self-host/README.md's timing notes). Run
+/// explicitly (`cargo test --workspace -- --ignored
+/// self_hosted_self_hosting_demo`) or in a slower/nightly CI lane, not
+/// the default fast suite.
+#[test]
+#[ignore]
+fn self_hosted_self_hosting_demo_runs_lexer_and_parser_through_the_interpreter() {
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/self_hosting_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "self_hosting_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("all 19 tokens match the host-run lexer exactly"),
+        "Part 1's differential check against the host-run lexer should pass for every token: {stdout}"
+    );
+    assert!(
+        stdout.contains("statements match the host-run parser exactly, field by field"),
+        "Part 2's differential check against the host-run parser should pass for every statement: {stdout}"
+    );
+    assert!(
+        !stdout.contains("FAIL"),
+        "no differential check in either part should report a mismatch: {stdout}"
+    );
+}
+
+/// The full self-hosted compile pipeline, end to end: `lucid run
+/// self-host/compile_demo.lucid` lexes, parses, checks, and generates C
+/// for several programs -- entirely through self-host/lexer.lucid,
+/// parser.lucid, checker.lucid, and codegen.lucid -- writing each
+/// program's C output to self-host/compile_demo_<name>.c (gitignored;
+/// regenerated here). Lucid has no subprocess/exec builtin, so the one
+/// step that can't happen from inside the Lucid program itself is
+/// invoking the system C compiler -- this test is that external driver,
+/// the same role `compiler/crates/lucid-codegen` itself plays for its
+/// own generated C. Compiles each file with the same `gcc` invocation a
+/// human would use, runs the resulting native binary, and checks its
+/// output against `lucid run`'s own output for that exact source file --
+/// not a hardcoded expected string -- the same differential discipline
+/// self_hosting_demo.lucid already applies to the self-hosted lexer and
+/// parser. `vectors` is the actual milestone this whole pipeline was
+/// built toward: examples/vectors.lucid is a real Lucid program that
+/// was never written for this pipeline, using classes and `dispatch
+/// def` operator overloading; the rest are hand-written under
+/// self-host/compile_demo_programs/, covering every operator and
+/// control-flow form codegen.lucid supports. (All of this lives in one
+/// #[test]: a separate test compiling the same shared
+/// self-host/compile_demo_*.c files would race with this one whenever
+/// cargo test runs them in parallel.)
+#[test]
+fn self_hosted_compile_demo_produces_correct_native_binaries() {
+    use std::fs;
+    use std::process::Command;
+    let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
+
+    let cases: [(&str, &str); 21] = [
+        ("fib", "self-host/compile_demo_programs/fib.lucid"),
+        (
+            "factorial",
+            "self-host/compile_demo_programs/factorial.lucid",
+        ),
+        ("gcd", "self-host/compile_demo_programs/gcd.lucid"),
+        ("divmod", "self-host/compile_demo_programs/divmod.lucid"),
+        ("bools", "self-host/compile_demo_programs/bools.lucid"),
+        ("loops", "self-host/compile_demo_programs/loops.lucid"),
+        ("records", "self-host/compile_demo_programs/records.lucid"),
+        ("strings", "self-host/compile_demo_programs/strings.lucid"),
+        ("lists", "self-host/compile_demo_programs/lists.lucid"),
+        ("mutation", "self-host/compile_demo_programs/mutation.lucid"),
+        ("methods", "self-host/compile_demo_programs/methods.lucid"),
+        ("dicts", "self-host/compile_demo_programs/dicts.lucid"),
+        (
+            "module_scope",
+            "self-host/compile_demo_programs/module_scope.lucid",
+        ),
+        (
+            "union_types",
+            "self-host/compile_demo_programs/union_types.lucid",
+        ),
+        ("imports_demo", "self-host/imports_demo.lucid"),
+        (
+            "inheritance",
+            "self-host/compile_demo_programs/inheritance.lucid",
+        ),
+        (
+            "parser_gaps",
+            "self-host/compile_demo_programs/parser_gaps.lucid",
+        ),
+        (
+            "checker_gaps",
+            "self-host/compile_demo_programs/checker_gaps.lucid",
+        ),
+        (
+            "codegen_gaps",
+            "self-host/compile_demo_programs/codegen_gaps.lucid",
+        ),
+        (
+            "interpreter_gaps",
+            "self-host/compile_demo_programs/interpreter_gaps.lucid",
+        ),
+        ("vectors", "examples/vectors.lucid"),
+    ];
+
+    for (name, _) in cases {
+        let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
+    }
+    let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_broken.c"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+        .args(["run", "self-host/compile_demo.lucid"])
+        .current_dir(&repo_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "compile_demo.lucid should run cleanly: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("CHECK ERROR: undefined name 'missing_variable'"),
+        "the broken program should fail checking with the expected error, not produce C: {stdout}"
+    );
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "lucid_self_hosted_compile_demo_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    for (name, source_path) in cases {
+        let interpreted_output = Command::new(env!("CARGO_BIN_EXE_lucid"))
+            .args(["run", source_path])
+            .current_dir(&repo_root)
+            .output()
+            .unwrap();
+        assert!(
+            interpreted_output.status.success(),
+            "the reference interpreter should run {source_path} cleanly"
+        );
+
+        let c_path = format!("{repo_root}/self-host/compile_demo_{name}.c");
+        assert!(
+            fs::metadata(&c_path).is_ok(),
+            "compile_demo.lucid should have written {c_path}"
+        );
+        let binary_path = temp_dir.join(name);
+        let gcc_status = Command::new("gcc")
+            .args(["-std=c11", "-o"])
+            .arg(&binary_path)
+            .arg(&c_path)
+            .status()
+            .unwrap();
+        assert!(
+            gcc_status.success(),
+            "gcc should compile the generated C for '{name}' without error"
+        );
+        let run_output = Command::new(&binary_path).output().unwrap();
+        assert!(
+            run_output.status.success(),
+            "the compiled '{name}' binary should exit successfully"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&interpreted_output.stdout),
+            "the compiled '{name}' binary's output should match the reference interpreter's exactly for {source_path}"
+        );
+    }
+
+    for (name, _) in cases {
+        let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_{name}.c"));
+    }
+    let _ = fs::remove_file(format!("{repo_root}/self-host/compile_demo_broken.c"));
     let _ = fs::remove_dir_all(&temp_dir);
 }

@@ -5549,7 +5549,23 @@ static inline void lucid_print_val(LucidVal v) {
                     "LucidVal".to_string()
                 }
             }
-            Expr::Index { .. } => "LucidVal".to_string(),
+            Expr::Index { value, .. } => {
+                // Indexing a statically-typed string yields another string
+                // (a single character), the same as slicing it does just
+                // above -- but unlike slicing this had no arm of its own,
+                // so it fell into the catch-all "LucidVal" below. That left
+                // `c = s[i]` boxed, so `result + c` (str + LucidVal) missed
+                // the string-concatenation case at the `+` operator and
+                // silently compiled as numeric addition instead. Every
+                // other receiver type keeps the conservative boxed default:
+                // list/dict/set elements aren't tracked precisely enough
+                // here to give them a real static type.
+                if self.infer_expr_type(value, vars) == "const char*" {
+                    "const char*".to_string()
+                } else {
+                    "LucidVal".to_string()
+                }
+            }
             Expr::Binary {
                 op, left, right, ..
             } => {
@@ -17917,6 +17933,24 @@ print(c.x, c.y)
         let _ = fs::remove_file(&output);
         assert!(run.status.success(), "native program failed: {:?}", run);
         assert_eq!(String::from_utf8_lossy(&run.stdout), "0\n");
+    }
+
+    #[test]
+    fn native_string_index_result_concatenates_as_a_string() {
+        let source = "def build(s: str) -> str:\n    result = \"\"\n    i = 0\n    while i < len(s):\n        c = s[i]\n        result = result + c\n        i = i + 1\n    return result\nprint(build(\"hi\"))\n";
+        let module = parse(source).expect("string-index source should parse");
+        let output = std::env::temp_dir().join(format!(
+            "lucid_codegen_str_index_concat_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&output);
+        compile_to_native(&module, &output, 0).expect(
+            "concatenating a single-character string index result should compile as string concatenation, not numeric addition",
+        );
+        let run = Command::new(&output).output().expect("run native binary");
+        let _ = fs::remove_file(&output);
+        assert!(run.status.success(), "native program failed: {:?}", run);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "hi\n");
     }
 
     #[test]

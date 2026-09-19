@@ -1,0 +1,54 @@
+def sum_list() -> int:
+    total = 0
+    for x in [10, 20, 30]:
+        total = total + x
+    return total
+
+def sum_range() -> int:
+    total = 0
+    for x in range(1, 6):
+        total = total + x
+    return total
+
+def find_in_grid() -> int:
+    found = -1
+    for row in [1, 2, 3]:
+        for col in [10, 20, 30]:
+            if row == 2 and col == 20:
+                found = row * 100 + col
+                break
+        if_broken:
+            break
+    return found
+
+def count_until_break() -> int:
+    x = 0
+    while x < 100:
+        if x == 7:
+            break
+        x = x + 1
+    if_broken:
+        print("stopped early at", x)
+    return x
+
+def range_bound_evaluated_once() -> int:
+    n = 3
+    count = 0
+    for x in range(n):
+        n = n + 10
+        count = count + 1
+    return count
+
+def range_target_rebinding_does_not_affect_iteration() -> int:
+    total = 0
+    for x in range(4):
+        x = x + 100
+        total = total + x
+    return total
+
+print(sum_list())
+print(sum_range())
+print(find_in_grid())
+print(count_until_break())
+print(range_bound_evaluated_once())
+print(range_target_rebinding_does_not_affect_iteration())

@@ -1,0 +1,812 @@
+# A shared type representation for self-host/checker.lucid and
+# self-host/codegen.lucid, written in Lucid: both phases need to know
+# each expression's type (checker to reject a wrong program, codegen to
+# pick the right C representation and resolve which `dispatch def`
+# overload a call means), so the representation and the class/function
+# tables built from it live here once, not duplicated in each.
+#
+# Deliberately small: `int`, `bool`, `str`, a named class (which may
+# extend one other class), `list[T]`, `dict[str, V]`, and (as of
+# UnionLType, below) a union of these -- no generics beyond list/dict,
+# no inference beyond "what does this literal/parameter/field/return
+# type say". A function's parameters are always exactly one of the
+# non-union types -- a return type, a local variable, or a class field
+# may be a union too (see UnionLType's own comment for why the
+# distinction is specifically parameters, not "value vs. return type"
+# the way NoneType's is).
+
+from .ast import TypeExpr, NamedType, UnionType, Stmt, FromImport, Import, ParsedModule
+from .parser import parse, ParserError
+
+sealed class LType:
+    pass
+
+class IntType(LType):
+    pass
+
+class BoolType(LType):
+    pass
+
+class StrType(LType):
+    pass
+
+# `self-host/ast.lucid`'s own `FloatLit.value`/`ComplexLit.value`
+# fields, and nothing else -- no float arithmetic, comparison, or
+# dispatch overloads anywhere in this subset (parser.lucid only ever
+# constructs a FloatLit and never reads its value back out). Exists
+# purely so `collect_class` can register those two fields at all
+# (without it, `field 'value' has an unsupported type` short-circuits
+# the whole Construct, dropping its field list to zero -- see
+# check_construct) and so `float(tok.text)` (check_call's own `int`/
+# `float` conversion builtins) has something to return.
+class FloatType(LType):
+    pass
+
+class ClassType(LType):
+    name: str
+
+# A function/method's return type only, never a parameter, field, local
+# variable, or list element type -- `none` isn't a value this subset
+# can hold in a variable, only the type of "this call has nothing
+# useful to hoist a declaration for". `resolve_type_expr` only produces
+# it for a `-> none` (or omitted, see collect_function_signature)
+# return-type annotation.
+class NoneType(LType):
+    pass
+
+# `list[T]` for T in int/bool/str/a class -- no nested list[list[T]]
+# (resolve_type_expr rejects it), and no other collection type in this
+# subset. Reference semantics, not by-value: Value::List in
+# lucid-runtime is Rc<RefCell<Vec<Value>>>, an alias of a list mutates
+# every alias (verified: `b = a; b.append(3)` changes `len(a)` too) --
+# the first reference-semantics type this subset represents, unlike
+# every plain-struct class so far.
+class ListType(LType):
+    element_type: LType
+
+# `dict[str, V]` for V in int/bool/str -- always `str` keys, never a
+# type parameter of their own: lucid-runtime's Value::Dict is
+# Rc<RefCell<HashMap<String, Value>>>, keys are always Rust `String`
+# regardless of the declared key type, so representing anything but a
+# `str` key here would diverge from what the reference interpreter
+# actually does with the same program. Reference semantics, same as
+# `list[T]` and for the same underlying reason (Rc<RefCell<_>>). `V` is
+# int/bool/str/float, a class, or list[T] -- checker.lucid's own
+# `known: dict[str, LType]`/`classes: dict[str, ClassSig]` and
+# types.lucid's own `FuncTable.signatures: dict[str, list[FuncSig]]`
+# need a class-valued and a list-valued dict respectively, the shape
+# self-host/checker.lucid itself needed once it started compiling
+# through this pipeline. Not `dict`/`none`/a union, still -- a
+# dict-of-dict or dict-of-union value has no real need here yet.
+class DictType(LType):
+    value_type: LType
+
+# `set[str]` -- codegen.lucid's own dominant use (`names: set[str] = {}`,
+# tracking which local names are already hoisted; `seen: set[str]`,
+# types.lucid's own resolve_all_declarations, tracking which files are
+# already inlined), always a `str` element in practice, but resolved
+# generically like list[T]'s own element type -- narrower than a real
+# hash set (see emit_set_type's own note), just membership (`in`/
+# `not in`) and `.add(...)`, nothing else this subset needs yet.
+class SetType(LType):
+    element_type: LType
+
+# A union of two or more of the types above. Unlike NoneType, this
+# *does* have a real runtime representation (a tagged struct, see
+# codegen.lucid's emit_union_type) -- a bare local variable can hold one
+# (self-host/lexer.lucid does exactly this: `layout =
+# self.handle_indentation()` binds a plain local to a `Token | none`
+# value, narrowed only later by the `match` that reads it), and so can a
+# class field (self-host/ast.lucid's own dominant field shape: `alias:
+# str | none`, checker.lucid's collect_class allows it now, with
+# checker/codegen both wrapping a member value into the field's own
+# union at construction and assignment sites -- see check_construct and
+# codegen_expr's own Construct case). It's still only a *parameter*
+# that's rejected (collect_function_signature/method_signature_for),
+# since nothing needs a union-typed parameter yet and accepting one
+# would need its own call-site wrapping logic this subset doesn't have.
+# `resolve_type_expr` only ever produces one from a `-> A | B`
+# annotation or a field's own declared type. `checker.lucid`'s
+# `check_stmt` narrows a union value to one member at a time, either
+# through a `match` statement's own type patterns (`case Token:`/`case
+# none:`) or through `?` (see check_propagate) -- every *other* use of a
+# union-typed value (as a binary/unary operand, a call argument other
+# than a Construct's own, a dict/list element, ...) is rejected the same
+# way any other unsupported expression shape is, simply by none of those
+# checks having a UnionLType case to accept.
+# `members` keeps the order written in the source (`A | B` is `[A, B]`,
+# not `[B, A]`) for type_name's own diagnostics; mangle_component and
+# types_equal both treat it as an unordered set instead, via
+# sorted_member_names, so `A | B` and `B | A` (if either spelling
+# appeared) would still name the same C struct and compare
+# equal.
+class UnionLType(LType):
+    members: list[LType]
+
+def type_name(t: LType) -> str:
+    match t as result:
+        case IntType:
+            return "int"
+        case BoolType:
+            return "bool"
+        case StrType:
+            return "str"
+        case FloatType:
+            return "float"
+        case ClassType:
+            return result.name
+        case ListType:
+            return "list[" + type_name(result.element_type) + "]"
+        case DictType:
+            return "dict[str, " + type_name(result.value_type) + "]"
+        case SetType:
+            return "set[" + type_name(result.element_type) + "]"
+        case NoneType:
+            return "none"
+        case UnionLType:
+            text = ""
+            i = 0
+            while i < len(result.members):
+                if i > 0:
+                    text = text + " | "
+                text = text + type_name(result.members[i])
+                i = i + 1
+            return text
+        case _:
+            return "?"
+
+# Every member's own mangle_component, sorted alphabetically -- an
+# order-insensitive canonical form so `A | B` and `B | A` (if either
+# spelling appeared) name the same C struct in codegen.lucid, the same
+# way sorted module-level names give codegen.lucid's own static-global
+# emission a stable order despite dict[str, V]'s unordered iteration.
+def sorted_member_names(members: list[LType]) -> list[str]:
+    names: list[str] = []
+    for m in members:
+        names.append(mangle_component(m))
+    return sorted(names)
+
+# The members themselves, in the same canonical (sorted-by-
+# mangle_component) order sorted_member_names names -- codegen.lucid's
+# emit_union_type needs the actual LType (for c_type_of), not just its
+# name, to build each tagged struct's own field list, with the same tag
+# (positional index into this list) c_type_of/codegen's tag checks use.
+def sorted_union_members(members: list[LType]) -> list[LType]:
+    ordered_names = sorted_member_names(members)
+    result: list[LType] = []
+    for n in ordered_names:
+        for m in members:
+            if mangle_component(m) == n:
+                result.append(m)
+    return result
+
+# Like type_name, but for building a C identifier (mangled_name in
+# codegen.lucid) -- type_name's `list[int]` has brackets, which aren't
+# valid in a C identifier.
+def mangle_component(t: LType) -> str:
+    match t as result:
+        case ListType:
+            return "list_" + mangle_component(result.element_type)
+        case DictType:
+            return "dict_str_" + mangle_component(result.value_type)
+        case SetType:
+            return "set_" + mangle_component(result.element_type)
+        case UnionLType:
+            text = "union"
+            for n in sorted_member_names(result.members):
+                text = text + "_" + n
+            return text
+        case _:
+            return type_name(t)
+
+def types_equal(a: LType, b: LType) -> bool:
+    match a as left:
+        case IntType:
+            match b as right:
+                case IntType:
+                    return true
+                case _:
+                    return false
+        case BoolType:
+            match b as right:
+                case BoolType:
+                    return true
+                case _:
+                    return false
+        case StrType:
+            match b as right:
+                case StrType:
+                    return true
+                case _:
+                    return false
+        case FloatType:
+            match b as right:
+                case FloatType:
+                    return true
+                case _:
+                    return false
+        case ClassType:
+            match b as right:
+                case ClassType:
+                    return left.name == right.name
+                case _:
+                    return false
+        case ListType:
+            match b as right:
+                case ListType:
+                    return types_equal(left.element_type, right.element_type)
+                case _:
+                    return false
+        case DictType:
+            match b as right:
+                case DictType:
+                    return types_equal(left.value_type, right.value_type)
+                case _:
+                    return false
+        case SetType:
+            match b as right:
+                case SetType:
+                    return types_equal(left.element_type, right.element_type)
+                case _:
+                    return false
+        case NoneType:
+            match b as right:
+                case NoneType:
+                    return true
+                case _:
+                    return false
+        case UnionLType:
+            match b as right:
+                case UnionLType:
+                    if len(left.members) != len(right.members):
+                        return false
+                    for lm in left.members:
+                        found = false
+                        for rm in right.members:
+                            if types_equal(lm, rm):
+                                found = true
+                        if not found:
+                            return false
+                    return true
+                case _:
+                    return false
+        case _:
+            return false
+
+# Is a value of type `value_type` usable where `expected` is required --
+# either the same type, or, when `expected` is a union, exactly one of
+# its members? Used everywhere a union return type meets a concrete
+# value: `return LexError(...)` from a `-> Token | LexError` method
+# (value_type is LexError, expected is the union, not equal to it), and
+# a `match` arm's own pattern type narrowing a union subject down to one
+# member (see checker.lucid's MatchStmt handling). Never the other
+# direction -- a union can't satisfy a non-union `expected`, since
+# nothing in this subset can hold a union value at rest, only narrow one
+# to a member immediately.
+def assignable_to(value_type: LType, expected: LType) -> bool:
+    if types_equal(value_type, expected):
+        return true
+    match expected as ut:
+        case UnionLType:
+            for m in ut.members:
+                if types_equal(value_type, m):
+                    return true
+            return false
+        case _:
+            return false
+
+# `self.classes.get(cd.name, none) != none` -- checker.lucid's own
+# dominant "is this optional value present" shape (check_binary's own
+# EQ/NOT_EQ case) needs to know whether a union has `none` as one of
+# its members at all, distinct from union_member_index's own "which
+# position" (whose 0-fallback is ambiguous with a real index 0 here).
+def union_has_none_member(u: UnionLType) -> bool:
+    for m in u.members:
+        if types_equal(m, NoneType()):
+            return true
+    return false
+
+# `sibling.sealed_root == root` (`types.lucid`'s own class_tag,
+# `sealed_root: str | none` compared against a plain `str`) --
+# generalizes union_has_none_member to any exact member type, not just
+# `none` specifically.
+def union_member_type_equal(u: UnionLType, t: LType) -> bool:
+    for m in u.members:
+        if types_equal(m, t):
+            return true
+    return false
+
+def type_list_equal(a: list[LType], b: list[LType]) -> bool:
+    if len(a) != len(b):
+        return false
+    i = 0
+    while i < len(a):
+        if not types_equal(a[i], b[i]):
+            return false
+        i = i + 1
+    return true
+
+def resolve_type_expr(t: TypeExpr | none) -> LType | none:
+    match t as result:
+        case none:
+            return none
+        case NamedType:
+            if result.name == "int":
+                return IntType()
+            if result.name == "bool":
+                return BoolType()
+            if result.name == "str":
+                return StrType()
+            if result.name == "float":
+                return FloatType()
+            if result.name == "none":
+                return NoneType()
+            if result.name == "list" and len(result.args) == 1:
+                match resolve_type_expr(result.args[0]) as et:
+                    case ListType:
+                        return none
+                    case NoneType:
+                        return none
+                    case UnionLType:
+                        return none
+                    case LType:
+                        return ListType(et)
+                    case none:
+                        return none
+            if result.name == "set" and len(result.args) == 1:
+                match resolve_type_expr(result.args[0]) as set_et:
+                    case StrType:
+                        return SetType(set_et)
+                    case _:
+                        return none
+            if result.name == "dict" and len(result.args) == 2:
+                match result.args[0] as key_type_expr:
+                    case NamedType:
+                        if key_type_expr.name != "str":
+                            return none
+                    case _:
+                        return none
+                match resolve_type_expr(result.args[1]) as vt:
+                    case DictType:
+                        return none
+                    case NoneType:
+                        return none
+                    case UnionLType:
+                        return none
+                    case LType:
+                        return DictType(vt)
+                    case none:
+                        return none
+            if len(result.name) > 0 and result.name[0] >= "A" and result.name[0] <= "Z":
+                return ClassType(result.name)
+            return none
+        case UnionType:
+            members: list[LType] = []
+            for member_expr in result.types:
+                match resolve_type_expr(member_expr) as mt:
+                    case UnionLType:
+                        return none
+                    case LType:
+                        members.append(mt)
+                    case none:
+                        return none
+            if len(members) < 2:
+                return none
+            return UnionLType(members)
+        case _:
+            return none
+
+class FieldSig:
+    name: str
+    field_type: LType
+
+# Defined here, before ClassSig, not down with FuncTable below where it
+# would read more naturally next to register_signature/find_signature
+# -- ClassSig.methods (below) is `dict[str, FuncSig]`, and leaving
+# FuncSig's own definition to forward-reference *from* a dict value
+# position inside another class field, while `dict[str, ClassSig]`
+# itself gets passed between two different function signatures
+# (inherited_fields/is_subclass_of/class_assignable_to and their own
+# callers), triggers a real bug in compiler/crates/lucid-checker: a
+# spurious "argument N to '...' has incompatible type" on the *second*
+# function's own call to the first, gone the moment FuncSig is moved
+# ahead of ClassSig instead. Root-caused with a from-scratch, ~25-line
+# reproduction (self-host/README.md's Design notes has the details) --
+# not fixed in the Rust source, out of scope for this branch; this
+# reordering is the workaround.
+class FuncSig:
+    name: str
+    param_types: list[LType]
+    return_type: LType
+
+class ClassSig:
+    name: str
+    fields: list[FieldSig]
+    # A method's own FuncSig never includes `self` in param_types --
+    # the receiver already supplies that type, at the call site, the
+    # same way it isn't repeated in the C signature codegen.lucid
+    # emits (`self` becomes the C function's own first parameter,
+    # `ClassName *self`, built from `cls.name` directly, not from
+    # anything stored here). No dispatch/overloading for methods in
+    # this subset -- one FuncSig per method name, unlike FuncTable's
+    # list[FuncSig] for free functions.
+    methods: dict[str, FuncSig]
+    # The one class this class extends (`class Binary(Expr): ...`), if
+    # any -- self-host/ast.lucid's own node classes all extend a sealed
+    # base (`sealed class Expr: span: Span`) with its own field, the
+    # shape this subset needed real inheritance support for at all
+    # (see is_subclass_of/class_assignable_to below, and
+    # inherited_fields, which is why `fields` above already includes
+    # the parent's own fields, prepended, not just this class's own
+    # body -- Construct is positional, so `Binary(span, left, op,
+    # right)` needs `span` first). No multiple inheritance in this
+    # subset (matching docs/principles.md's own "at most one class
+    # parent" rule) -- a class's `bases` naming more than one type is
+    # rejected (see collect_class's own check for why, and that this
+    # subset doesn't distinguish a trait base from a class one, since
+    # nothing self-host/ast.lucid needs to compile uses a trait base at
+    # all).
+    parent: str | none
+    # The `sealed class` this class's own hierarchy is rooted at, if
+    # any -- itself, for a class where `is_sealed` is true (`Expr`
+    # itself); its parent's own `sealed_root`, inherited down the chain,
+    # for an ordinary subclass (`Binary`, `LiteralExpr`, ...); `none`
+    # for a class outside any sealed hierarchy at all (`Token`, say).
+    # Every class sharing the same `sealed_root` gets a runtime tag (see
+    # `class_tag`) so `match` can dispatch on which *concrete* subclass
+    # a sealed-base-typed value actually is -- the one thing
+    # `class_assignable_to`'s own subtyping can't do, since it only ever
+    # lets a value flow *up* the hierarchy, never back down to a
+    # specific subclass (see checker.lucid's `check_match` and
+    # codegen.lucid's `codegen_match`, both gaining a whole second case
+    # for this alongside their existing union-dispatch one). Deliberately
+    # only one level of nesting is assumed throughout (a `sealed class`
+    # with direct concrete subclasses, never a subclass that's itself
+    # further subclassed) -- the only shape self-host/ast.lucid's own
+    # hierarchies (`Expr`, `Stmt`, `Pattern`, `TypeExpr`, ...) use.
+    sealed_root: str | none
+
+def field_type(cls: ClassSig, name: str) -> LType | none:
+    for f in cls.fields:
+        if f.name == name:
+            return f.field_type
+    return none
+
+# The runtime tag a concrete instance of `name` (a class whose own
+# `sealed_root` is set) carries in its own hidden `__lucid_tag` field
+# (see codegen.lucid's emit_struct/emit_constructor) -- purely derived,
+# not stored anywhere, from every registered class sharing the same
+# `sealed_root`, sorted by name for the same reproducible-output reason
+# every other per-run-nondeterministic ordering in this pipeline is
+# sorted (dict iteration over `classes` isn't guaranteed stable).
+# `name` itself must have a `sealed_root` (checker.lucid only ever calls
+# this after confirming that); returns 0 if `name` is somehow missing
+# from `classes` or has no `sealed_root`, which should never happen for
+# a program that passed checking.
+# Every class name sharing `root` as its own `sealed_root`, unsorted
+# (`class_tag` below sorts its own copy for a stable tag order;
+# `checker.lucid`'s own `check_sealed_match` uses the unsorted list
+# directly, since it only needs to check membership, not assign an
+# index).
+def sealed_siblings(classes: dict[str, ClassSig], root: str) -> list[str]:
+    siblings: list[str] = []
+    for cname in classes:
+        match classes.get(cname, none) as sibling:
+            case ClassSig:
+                if sibling.sealed_root == root:
+                    siblings.append(cname)
+            case none:
+                pass
+    return siblings
+
+def class_tag(classes: dict[str, ClassSig], name: str) -> int:
+    match classes.get(name, none) as cls:
+        case ClassSig:
+            match cls.sealed_root as root:
+                case str:
+                    ordered = sorted(sealed_siblings(classes, root))
+                    i = 0
+                    while i < len(ordered):
+                        if ordered[i] == name:
+                            return i
+                        i = i + 1
+                    return 0
+                case none:
+                    return 0
+        case none:
+            return 0
+
+def method_signature(cls: ClassSig, name: str) -> FuncSig | none:
+    return cls.methods.get(name, none)
+
+# Every field a fully-constructed value of this class carries, parent's
+# own fields first -- self-host/ast.lucid's `class Binary(Expr): left:
+# Expr, op: str, right: Expr` (with `Expr` itself `sealed class Expr:
+# span: Span`) needs `Binary`'s own ClassSig.fields to be `[span, left,
+# op, right]`, in that order, matching how `Binary(span, left, op,
+# right)` is actually constructed and how emit_struct/emit_constructor
+# (codegen.lucid) lay out and initialize the generated C struct.
+# `classes` must already have every ancestor registered -- true as long
+# as a base class is declared before its subclasses in the same file
+# (self-host/ast.lucid always does; collect_class calls this only after
+# resolving `parent`, which itself requires the parent to already be in
+# `classes`).
+def inherited_fields(classes: dict[str, ClassSig], parent: str | none, own_fields: list[FieldSig]) -> list[FieldSig]:
+    fields: list[FieldSig] = []
+    match parent as p:
+        case str:
+            match classes.get(p, none) as parent_cls:
+                case ClassSig:
+                    for f in parent_cls.fields:
+                        fields.append(f)
+                case none:
+                    pass
+        case none:
+            pass
+    for f in own_fields:
+        fields.append(f)
+    return fields
+
+# Is `sub` the same class as `super_name`, or does it extend it,
+# directly or transitively? Walks ClassSig.parent up the chain --
+# `classes` must have every class in the chain registered (see
+# inherited_fields's own note). `limit` guards against an accidental
+# cycle (this subset never checks for one elsewhere) turning into an
+# infinite loop; self-host/ast.lucid's own deepest chain is two levels,
+# so this is generous, not tuned.
+def is_subclass_of(classes: dict[str, ClassSig], sub: str, super_name: str) -> bool:
+    name = sub
+    limit = 1000
+    while limit > 0:
+        if name == super_name:
+            return true
+        match classes.get(name, none) as cls:
+            case ClassSig:
+                match cls.parent as p:
+                    case str:
+                        name = p
+                    case none:
+                        return false
+            case none:
+                return false
+        limit = limit - 1
+    return false
+
+# assignable_to, but aware of class inheritance too -- assignable_to
+# itself stays pure (no class table), since almost every call site
+# doesn't need this (no int/bool/str/list/dict/union comparison ever
+# involves a parent class), so only the few call sites that actually
+# handle a class-typed value against an expected type -- check_construct
+# and check_stmt's Return arm in checker.lucid, codegen_stmt's own
+# Return-wrapping in codegen.lucid -- call this instead. A `LiteralExpr`
+# value satisfies an `Expr`-typed (or `Expr | ParserError`-typed)
+# expectation this way, the same way self-host/parser.lucid's own
+# `return LiteralExpr(...)` (declared `-> Expr | ParserError`) needs.
+def class_assignable_to(classes: dict[str, ClassSig], value_type: LType, expected: LType) -> bool:
+    if assignable_to(value_type, expected):
+        return true
+    match value_type as vt:
+        case ClassType:
+            match expected as et:
+                case ClassType:
+                    return is_subclass_of(classes, vt.name, et.name)
+                case UnionLType:
+                    for m in et.members:
+                        match m as mt:
+                            case ClassType:
+                                if is_subclass_of(classes, vt.name, mt.name):
+                                    return true
+                            case _:
+                                pass
+                    return false
+                case _:
+                    return false
+        case UnionLType:
+            # A union value satisfies a wider expectation when *every*
+            # one of its own members does -- self-host/parser.lucid's
+            # own `parse` returns `ParsedModule | ParserError |
+            # LexError`, satisfied by a plain `return` of a call whose
+            # own declared return type is the narrower `ParsedModule |
+            # ParserError` (no `LexError`, on a path nothing can
+            # lex-fail on). Recurses into this same function per member,
+            # so a member that's itself a *subtype* of one of
+            # `expected`'s own members (not just an exact one) still
+            # works the same way a single class value already does
+            # above.
+            for m in vt.members:
+                if not class_assignable_to(classes, m, expected):
+                    return false
+            return true
+        case _:
+            return false
+
+# Like type_list_equal, but subtype-aware (class_assignable_to) per
+# pair, in order -- a method call's own argument list (checker.lucid's
+# check_call, its ClassType-receiver case), where there's no dispatch
+# overload set to pick among, just one method signature per name per
+# class, so there's no "try exact first" concern the way
+# find_signature_assignable has for a plain function name.
+def type_list_assignable(classes: dict[str, ClassSig], values: list[LType], expecteds: list[LType]) -> bool:
+    if len(values) != len(expecteds):
+        return false
+    i = 0
+    while i < len(values):
+        if not class_assignable_to(classes, values[i], expecteds[i]):
+            return false
+        i = i + 1
+    return true
+
+# A class is printable in this subset if every field is int/bool/str --
+# codegen.lucid's per-class printer only knows how to format those three
+# directly; a class-typed field would need its own nested printer call,
+# not supported yet. A union-typed field (self-host/ast.lucid's own
+# `alias: str | none` and its many siblings) is the same kind of gap --
+# codegen.lucid's emit_print_function has no case for formatting a
+# tagged union struct either, and printing its raw bytes as %ld/%s would
+# be undefined behavior, not just wrong output.
+def is_printable_class(cls: ClassSig) -> bool:
+    for f in cls.fields:
+        match f.field_type as t:
+            case ClassType:
+                return false
+            case ListType:
+                return false
+            case DictType:
+                return false
+            case UnionLType:
+                return false
+            case _:
+                pass
+    return true
+
+# A function/dispatch name can have more than one FuncSig -- Lucid's
+# multiple dispatch (docs/dispatch.md) lets several `dispatch def`s share
+# a name, resolved by the STATIC argument types at the call site (this
+# subset resolves purely statically, at check/codegen time, not with any
+# runtime dispatch mechanism -- correct as long as every call's argument
+# types are exactly known, which they always are in an int/bool/str/
+# class-only subset with no subtyping).
+class FuncTable:
+    signatures: dict[str, list[FuncSig]]
+
+def new_func_table() -> FuncTable:
+    return FuncTable({:})
+
+def register_signature(table: FuncTable, sig: FuncSig):
+    match table.signatures.get(sig.name, none) as existing:
+        case list[FuncSig]:
+            existing.append(sig)
+        case none:
+            table.signatures[sig.name] = [sig]
+
+def find_signature(table: FuncTable, name: str, arg_types: list[LType]) -> FuncSig | none:
+    match table.signatures.get(name, none) as sigs:
+        case list[FuncSig]:
+            for sig in sigs:
+                if type_list_equal(sig.param_types, arg_types):
+                    return sig
+            return none
+        case none:
+            return none
+
+# Like find_signature, but subtype-aware -- called with a plain,
+# non-dispatch function name (self-host/lexer.lucid's own `tokenize`, or
+# self-host/parser.lucid's `merge_span`, `dummy_span`, and its own
+# `Parser` methods calling each other) whose declared parameter is a
+# sealed base (`def merge_span(a: Span, b: Span) -> Span:` doesn't need
+# this, but `Ident`/`Binary`/... flowing into an `Expr`-typed parameter
+# does, the same subtyping check_construct/check_stmt's Return arm
+# already give a class-typed value). Tries an exact match first (find_
+# signature itself) so ordinary `dispatch def` overload resolution keeps
+# picking the single most specific registered signature when one
+# matches exactly; only falls back to a subtype-compatible one, in
+# registration order, when nothing matches exactly. A name with real
+# multiple dispatch (two `dispatch def`s differing only in a class
+# parameter's own exact type) could in principle make this fallback
+# ambiguous -- not a concern for anything self-host/lexer.lucid or
+# self-host/parser.lucid actually calls this way, and this subset
+# doesn't attempt to detect the ambiguous case honestly, just returns
+# the first match in registration order.
+def find_signature_assignable(classes: dict[str, ClassSig], table: FuncTable, name: str, arg_types: list[LType]) -> FuncSig | none:
+    match find_signature(table, name, arg_types) as exact:
+        case FuncSig:
+            return exact
+        case none:
+            pass
+    match table.signatures.get(name, none) as sigs:
+        case list[FuncSig]:
+            for sig in sigs:
+                if len(sig.param_types) == len(arg_types):
+                    all_ok = true
+                    i = 0
+                    while i < len(arg_types):
+                        if not class_assignable_to(classes, arg_types[i], sig.param_types[i]):
+                            all_ok = false
+                        i = i + 1
+                    if all_ok:
+                        return sig
+            return none
+        case none:
+            return none
+
+def has_any_signature(table: FuncTable, name: str) -> bool:
+    match table.signatures.get(name, none) as sigs:
+        case list[FuncSig]:
+            return len(sigs) > 0
+        case none:
+            return false
+
+# `from .ast import ...`/`from .lexer import ...` -- this subset's
+# relative-import spelling is always one dot plus the file's own stem,
+# resolved directly against self-host/ (every self-hosted file imports
+# only its siblings in this same directory; nothing here needs a real
+# package/path search). `"." -> ""`, `".ast" -> "ast"`, so
+# `resolve_import_path(".ast")` is `"self-host/ast.lucid"`.
+def resolve_import_path(module_name: str) -> str:
+    stripped = module_name
+    while len(stripped) > 0 and stripped[0] == ".":
+        stripped = stripped[1:]
+    return "self-host/" + stripped + ".lucid"
+
+# checker.lucid/codegen.lucid each process one module's own `list[Stmt]`
+# in isolation -- `self.classes`/`self.functions` (or their own copies)
+# only ever come from collect_declarations(stmts), which never sees
+# anything a `from .x import ...` names. self-host/parser.lucid imports
+# nearly every class in self-host/ast.lucid and `tokenize` from
+# self-host/lexer.lucid directly, constructing/matching/calling them --
+# checking or compiling it needs their signatures too. self-host/
+# lexer.lucid's own `keywords`/`single` are real module-level
+# variables, not classes or functions, and next_token/lex_ident_or_
+# keyword read them -- so a module-level VarDef/Assignment has to come
+# along too, not just ClassDef/FunctionStmt (a first draft only
+# returned those two, on the assumption every importable file was a
+# "pure library" with no top-level statements at all; wrong the moment
+# self-host/lexer.lucid, which does have `keywords`, got imported by
+# anything).
+#
+# This is deliberately not a real module system: it reads (`read_file`,
+# a builtin, the same one compile_demo.lucid already uses) and parses
+# every transitively-imported file, and returns every one of its
+# top-level statements except its own `from .x import ...`/`import x`
+# (already resolved recursively, and meaningless re-emitted verbatim)
+# -- a class or function declaration is orderindependent, so it's fine
+# to end up alongside the importing file's own; a module-level
+# VarDef/Assignment, or any other bare top-level statement, isn't --
+# see check_module/codegen_module's own callers, which prepend these
+# to the importing file's own top-level statements (in encounter
+# order) before deriving `module_scope`/the synthesized entry point
+# from that combined list, so an imported global like `keywords` is
+# declared and initialized before anything in the importing file's own
+# top-level code could read it. `seen` (by resolved file path) is
+# threaded through the recursion so a diamond import (two files
+# importing the same third one) or an import cycle only reads/parses
+# each file once.
+def resolve_all_declarations(stmts: list[Stmt], seen: set[str]) -> list[Stmt]:
+    declarations: list[Stmt] = []
+    for stmt in stmts:
+        match stmt as result:
+            case FromImport:
+                path = resolve_import_path(result.module_name)
+                if path not in seen:
+                    seen.add(path)
+                    match read_file(path) as source:
+                        case str:
+                            match parse(source) as parsed:
+                                case ParsedModule:
+                                    for inner in resolve_all_declarations(parsed.statements, seen):
+                                        declarations.append(inner)
+                                    for decl in parsed.statements:
+                                        match decl as d:
+                                            case FromImport:
+                                                pass
+                                            case Import:
+                                                pass
+                                            case _:
+                                                declarations.append(d)
+                                case _:
+                                    pass
+                        case _:
+                            pass
+            case _:
+                pass
+    return declarations

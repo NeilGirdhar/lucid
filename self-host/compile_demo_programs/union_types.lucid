@@ -1,0 +1,70 @@
+class Item:
+    value: int
+
+class StackError:
+    message: str
+
+class Stack:
+    items: list[Item]
+    pos: int
+
+    def peek(self) -> Item | none:
+        if self.pos < len(self.items):
+            return self.items[self.pos]
+        return none
+
+    def next(self) -> Item | StackError:
+        match self.peek() as result:
+            case Item:
+                self.pos = self.pos + 1
+                return result
+            case none:
+                return StackError("stack exhausted")
+
+def drain(s: Stack) -> list[Item] | StackError:
+    result: list[Item] = []
+    while true:
+        item = s.next()?
+        result.append(item)
+        if len(result) >= 3:
+            break
+    return result
+
+def first_or_fail(s: Stack) -> Item | StackError:
+    items = drain(s)?
+    return items[0]
+
+def best_or_none(s: Stack) -> Item | none:
+    best: Item | none = none
+    found = false
+    i = 0
+    while i < len(s.items):
+        if not found:
+            best = s.items[i]
+            found = true
+        i = i + 1
+    return best
+
+def print_best_or_none(s: Stack):
+    match best_or_none(s) as b:
+        case Item:
+            print(b.value)
+        case none:
+            print(-1)
+
+s = Stack([Item(1), Item(2), Item(3), Item(4)], 0)
+match first_or_fail(s) as outcome:
+    case Item:
+        print(outcome.value)
+    case StackError:
+        print(outcome.message)
+
+empty = Stack([], 0)
+match first_or_fail(empty) as outcome2:
+    case Item:
+        print(outcome2.value)
+    case StackError:
+        print(outcome2.message)
+
+print_best_or_none(s)
+print_best_or_none(empty)

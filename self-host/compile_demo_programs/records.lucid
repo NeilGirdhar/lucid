@@ -1,0 +1,17 @@
+class Point:
+    x: int
+    y: int
+
+class Person:
+    name: str
+    age: int
+    active: bool
+
+p = Point(3, 4)
+print(p)
+
+print("the point is", p)
+
+print(Person("Alice", 30, true))
+
+print(Point(1, 2), "and", Point(5, 6))

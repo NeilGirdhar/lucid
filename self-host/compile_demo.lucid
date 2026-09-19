@@ -1,0 +1,121 @@
+# The compile pipeline this directory has been building toward: lex,
+# parse, check, and generate C for real Lucid source, entirely through
+# code written in Lucid -- self-host/lexer.lucid, self-host/parser.lucid,
+# self-host/checker.lucid, self-host/codegen.lucid -- run by the
+# reference interpreter. The one step that can't happen from inside
+# Lucid is invoking the system C compiler: Lucid has no subprocess/exec
+# builtin, by design, so this writes each generated C file to
+# self-host/, and a driver outside Lucid (a shell command; see
+# self-host/README.md) compiles and runs it -- the same shape
+# compiler/crates/lucid-codegen itself has, shelling out to `gcc` from
+# Rust rather than from the Lucid code it's compiling.
+#
+# Six hand-written programs, each a real file under
+# self-host/compile_demo_programs/, exercising recursion, iteration, and
+# every operator codegen.lucid supports (each compiled to its own .c
+# file, and independently run through `lucid run` for a reference
+# output to differential-test the compiled binary's output against --
+# not a hardcoded expected string), one Lucid string literal that's
+# supposed to fail checking (proving a real error stops codegen rather
+# than emitting broken C), and -- the actual milestone --
+# examples/vectors.lucid, a real Lucid program from this repository, not
+# written for this pipeline: classes, `dispatch def` operator overloading
+# (resolved statically, by the exact argument types, since this subset
+# has no runtime dispatch mechanism -- see checker.lucid/codegen.lucid's
+# own header comments), and multi-argument, mixed str/int print(). All
+# the differential checks live in
+# self_hosted_compile_demo_produces_correct_native_binaries in
+# compiler/crates/lucid-cli/tests/spec_tests.rs.
+#
+# self-host/imports_demo.lucid (below) lives directly under self-host/,
+# not under self-host/compile_demo_programs/ like every other
+# hand-written program -- its own `from .lexer import ...` has to
+# resolve to self-host/lexer.lucid under both the reference
+# interpreter's real relative-import resolution (relative to the
+# importing file's own directory) and this subset's own simplified
+# resolve_import_path (types.lucid), which always resolves a
+# `from .x import ...` against self-host/ directly, regardless of the
+# importing file's own location (see its own comment for why that's an
+# accepted simplification, not a bug).
+
+from .parser import parse, ParserError
+from .lexer import LexError
+from .checker import check_program, CheckError
+from .codegen import codegen_module
+
+def compile_source(source: str) -> str | list[CheckError] | ParserError | LexError:
+    parsed = parse(source)?
+    errors = check_program(parsed.statements)
+    if len(errors) > 0:
+        return errors
+    return codegen_module(parsed.statements)
+
+def compile_path_to_file(label: str, source_path: str, output_path: str):
+    print("---", label, "---")
+    match read_file(source_path) as source:
+        case str:
+            match compile_source(source) as result:
+                case str:
+                    match write_file(output_path, result) as write_outcome:
+                        case none:
+                            print("wrote " + output_path + " (" + str(len(result)) + " bytes)")
+                        case ParseError:
+                            print("WRITE ERROR:", write_outcome.message)
+                case list[CheckError]:
+                    for e in result:
+                        print("CHECK ERROR:", e.message)
+                case ParserError:
+                    print("PARSE ERROR:", result.message)
+                case LexError:
+                    print("LEX ERROR:", result.message)
+        case ParseError:
+            print("READ ERROR:", source.message)
+
+def compile_to_file(label: str, source: str, path: str):
+    print("---", label, "---")
+    match compile_source(source) as result:
+        case str:
+            match write_file(path, result) as write_outcome:
+                case none:
+                    print("wrote " + path + " (" + str(len(result)) + " bytes)")
+                case ParseError:
+                    print("WRITE ERROR:", write_outcome.message)
+        case list[CheckError]:
+            for e in result:
+                print("CHECK ERROR:", e.message)
+        case ParserError:
+            print("PARSE ERROR:", result.message)
+        case LexError:
+            print("LEX ERROR:", result.message)
+
+broken_source = "def broken() -> int:\n    return missing_variable\n\nx = broken()\n"
+
+# Every program below except `broken` (which is supposed to fail
+# checking, so there's no compiled output to compare) is a real
+# self-host/compile_demo_programs/*.lucid file, run directly through
+# `lucid run` for its own reference output -- not a hardcoded string --
+# by self_hosted_compile_demo_produces_correct_native_binaries in
+# compiler/crates/lucid-cli/tests/spec_tests.rs, the same differential
+# discipline `vectors` below already uses.
+compile_path_to_file("fibonacci (recursion)", "self-host/compile_demo_programs/fib.lucid", "self-host/compile_demo_fib.c")
+compile_path_to_file("factorial (iteration)", "self-host/compile_demo_programs/factorial.lucid", "self-host/compile_demo_factorial.c")
+compile_path_to_file("gcd + classify (mod, and/or, comparisons)", "self-host/compile_demo_programs/gcd.lucid", "self-host/compile_demo_gcd.c")
+compile_path_to_file("divmod (Euclidean // and %, negative operands)", "self-host/compile_demo_programs/divmod.lucid", "self-host/compile_demo_divmod.c")
+compile_path_to_file("bools (bool literals, comparisons, and/or, printed as true/false)", "self-host/compile_demo_programs/bools.lucid", "self-host/compile_demo_bools.c")
+compile_path_to_file("loops (for over a list literal and range(), nested if_broken, while if_broken)", "self-host/compile_demo_programs/loops.lucid", "self-host/compile_demo_loops.c")
+compile_path_to_file("records (print() of a class value: a single field, mixed args, multi-field str/int/bool)", "self-host/compile_demo_programs/records.lucid", "self-host/compile_demo_records.c")
+compile_path_to_file("strings (str ==, !=, <, <=, >, >=, and len())", "self-host/compile_demo_programs/strings.lucid", "self-host/compile_demo_strings.c")
+compile_path_to_file("lists (typed empty + append + index + len, non-empty literal, for over a list, aliasing, list[bool]/list[str])", "self-host/compile_demo_programs/lists.lucid", "self-host/compile_demo_lists.c")
+compile_path_to_file("mutation (attribute assignment, mutation through a function call, -> none)", "self-host/compile_demo_programs/mutation.lucid", "self-host/compile_demo_mutation.c")
+compile_path_to_file("methods (methods with self: reading/mutating fields, calling another method, parameters, str/bool return types)", "self-host/compile_demo_programs/methods.lucid", "self-host/compile_demo_methods.c")
+compile_path_to_file("dicts (dict[str, V] literal + .get(), module-level and local, empty with a declared type)", "self-host/compile_demo_programs/dicts.lucid", "self-host/compile_demo_dicts.c")
+compile_path_to_file("module_scope (a module-level variable read by a function and by a class method, and shadowed by a same-named local)", "self-host/compile_demo_programs/module_scope.lucid", "self-host/compile_demo_module_scope.c")
+compile_path_to_file("union_types (a method returning T | none, a method returning T | ErrorClass narrowed by match, two chained '?' propagations including one through a list[T] | ErrorClass, mutation through self inside a match arm)", "self-host/compile_demo_programs/union_types.lucid", "self-host/compile_demo_union_types.c")
+compile_path_to_file("imports_demo (cross-file: from .lexer import is_digit, is_alpha, calling both, pulling in all of lexer.lucid's own declarations including its module-level keywords dict)", "self-host/imports_demo.lucid", "self-host/compile_demo_imports_demo.c")
+compile_path_to_file("inheritance (a class extending a sealed base -- inherited fields first in Construct, a subtype value returned/matched/field-assigned where the base or a base-containing union is expected, and '?' as a return statement's own value)", "self-host/compile_demo_programs/inheritance.lucid", "self-host/compile_demo_inheritance.c")
+compile_path_to_file("parser_gaps ('?' hoisted out of a Call argument and a Binary operand, int()/float() conversions and a float field, a local named 'default' (a C keyword), a VarDef initialized with a subtype Construct into a declared sealed-base type, and a local declared with a union type that's neither a return type nor a field)", "self-host/compile_demo_programs/parser_gaps.lucid", "self-host/compile_demo_parser_gaps.c")
+compile_path_to_file("checker_gaps (dict[str, T] for a class/list value including item assignment and index reads, dict.get() returning T | none, union-vs-none and union-member equality, a union-typed parameter, matching a sealed hierarchy member of a union, sealed-match wildcard alias binding, str()/endswith()/sorted()/int() builtins, set[str] with add()/in/not-in, for-loop iteration over a dict/list/set and over an arbitrary call's own return value, and bidirectional empty-literal call-argument inference)", "self-host/compile_demo_programs/checker_gaps.lucid", "self-host/compile_demo_checker_gaps.c")
+compile_path_to_file("codegen_gaps (str.replace(), chained on itself, and bidirectional empty-literal inference for a method-call argument -- self.combine([], {}) -- the same trick check_call's Ident case already had, now needed for an Attribute-callee method call too)", "self-host/compile_demo_programs/codegen_gaps.lucid", "self-host/compile_demo_codegen_gaps.c")
+compile_path_to_file("interpreter_gaps (a sealed-hierarchy match with no trailing wildcard covering every concrete subclass, float arithmetic/comparison, / and ** operators, list[T] index assignment, str(bool)/int(float)/float(int) conversions, len() on a dict[str, T], and '?' directly as a match statement's own subject)", "self-host/compile_demo_programs/interpreter_gaps.lucid", "self-host/compile_demo_interpreter_gaps.c")
+compile_to_file("broken (supposed to fail checking)", broken_source, "self-host/compile_demo_broken.c")
+compile_path_to_file("examples/vectors.lucid (classes, dispatch, strings -- a real Lucid program)", "examples/vectors.lucid", "self-host/compile_demo_vectors.c")

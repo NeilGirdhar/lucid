@@ -1,0 +1,31 @@
+x: int = 5
+
+def read_module_var() -> int:
+    return x + 1
+
+print(read_module_var())
+
+keywords: dict[str, str] = {
+    "true": "TRUE",
+    "false": "FALSE",
+}
+
+class Lexer:
+    pos: int
+
+    def lookup(self, text: str) -> str:
+        return keywords.get(text, "IDENT")
+
+l = Lexer(0)
+print(l.lookup("true"))
+print(l.lookup("false"))
+print(l.lookup("xyz"))
+
+count: int = 0
+
+def bump() -> int:
+    count = 5
+    return count
+
+print(bump())
+print(count)

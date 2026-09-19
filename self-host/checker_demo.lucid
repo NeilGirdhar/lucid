@@ -1,0 +1,329 @@
+# Exercises self-host/checker.lucid against a handful of small programs:
+# clean ones (plain functions, classes, dispatch) and one for each kind
+# of error it's supposed to catch.
+
+from .parser import parse, ParserError
+from .lexer import LexError
+from .checker import check_program, CheckError
+
+def check_source(source: str) -> list[CheckError] | ParserError | LexError:
+    parsed = parse(source)?
+    return check_program(parsed.statements)
+
+def report(label: str, source: str):
+    print("---", label, "---")
+    match check_source(source) as result:
+        case list[CheckError]:
+            if len(result) == 0:
+                print("(no errors)")
+            else:
+                for e in result:
+                    print("ERROR:", e.message)
+        case ParserError:
+            print("PARSE ERROR:", result.message)
+        case LexError:
+            print("LEX ERROR:", result.message)
+
+report("clean program", "def add(a: int, b: int) -> int:\n    return a + b\n\ndef main() -> int:\n    x = add(1, 2)\n    y = 0\n    while y < x:\n        y = y + 1\n    print(y)\n    return y\n")
+
+report("clean program with classes and dispatch", "class Vector2D:\n    x: int\n    y: int\n\ndispatch def __add__(a: Vector2D, b: Vector2D) -> Vector2D:\n    return Vector2D(a.x + b.x, a.y + b.y)\n\ndef main() -> int:\n    v1 = Vector2D(1, 2)\n    v2 = Vector2D(3, 4)\n    v3 = v1 + v2\n    print(v3.x, v3.y)\n    return 0\n")
+
+report("undefined variable", "def bad() -> int:\n    return missing\n")
+
+report("undefined function", "def bad() -> int:\n    return not_a_real_function(1)\n")
+
+report("wrong arity", "def add(a: int, b: int) -> int:\n    return a + b\n\ndef bad() -> int:\n    return add(1)\n")
+
+report("duplicate function (same signature twice)", "def dup() -> int:\n    return 1\n\ndef dup() -> int:\n    return 2\n")
+
+report("unsupported type", "def bad() -> dict[int, str]:\n    pass\n")
+
+report("unknown class", "def bad() -> int:\n    v = NotAClass(1)\n    return 0\n")
+
+report("wrong field count", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1)\n    return 0\n")
+
+report("wrong field type", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1, \"two\")\n    return 0\n")
+
+report("unknown field", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1, 2)\n    return p.z\n")
+
+report("no matching dispatch overload", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(1, 2)\n    q = p + 1\n    return 0\n")
+
+report("keyword construct arguments rejected", "class Point:\n    x: int\n    y: int\n\ndef bad() -> int:\n    p = Point(x=1, y=2)\n    return 0\n")
+
+report("for over a list literal, and range", "def main() -> int:\n    total = 0\n    for x in [1, 2, 3]:\n        total = total + x\n    for y in range(1, 4):\n        total = total + y\n    print(total)\n    return 0\n")
+
+report("for/while with if_broken", "def main() -> int:\n    for x in [1, 2, 3]:\n        if x == 2:\n            break\n    if_broken:\n        print(\"broke\")\n    y = 0\n    while y < 5:\n        y = y + 1\n    if_broken:\n        print(\"unreachable\")\n    return 0\n")
+
+report("for over mismatched list literal elements", "def main() -> int:\n    for x in [1, true, 3]:\n        print(x)\n    return 0\n")
+
+report("for over an unsupported iterable", "def main() -> int:\n    for x in 5:\n        print(x)\n    return 0\n")
+
+report("range() with the wrong number of arguments", "def main() -> int:\n    for x in range(1, 2, 3):\n        print(x)\n    return 0\n")
+
+report("print() of a class with int/bool/str fields is supported", "class Point:\n    x: int\n    y: int\n\ndef ok() -> int:\n    p = Point(1, 2)\n    print(p)\n    return 0\n")
+
+report("print() of a class with a class-typed field rejected", "class Inner:\n    x: int\n\nclass Outer:\n    inner: Inner\n\ndef bad() -> int:\n    o = Outer(Inner(1))\n    print(o)\n    return 0\n")
+
+report("freeze() rejected", "class Circle:\n    radius: int\n\ndef bad() -> int:\n    c = Circle(10)\n    frozen_c = freeze(c)\n    print(frozen_c)\n    return 0\n")
+
+report("str + str is supported (str concatenation)", "def bad() -> int:\n    s = \"a\" + \"b\"\n    return 0\n")
+
+report("str - str is still rejected (only + is supported for str)", "def bad() -> int:\n    s = \"a\" - \"b\"\n    return 0\n")
+
+report("str == str and str < str are supported", "def ok() -> int:\n    b = \"a\" == \"a\"\n    c = \"a\" < \"b\"\n    n = len(\"abc\")\n    return 0\n")
+
+report("int == bool rejected", "def bad() -> int:\n    b = 1 == true\n    return 0\n")
+
+report("bool arithmetic rejected", "def bad() -> int:\n    x = true + 1\n    return 0\n")
+
+report("int used with and/or rejected", "def bad() -> int:\n    b = 1 and 2\n    return 0\n")
+
+report("not on a non-bool rejected", "def bad() -> int:\n    b = not 5\n    return 0\n")
+
+report("unary minus on a non-int rejected", "def bad() -> int:\n    x = -true\n    return 0\n")
+
+report("declared/inferred VarDef mismatch rejected", "def bad() -> int:\n    x: int = \"s\"\n    return 0\n")
+
+report("retyping a name rejected", "def bad() -> int:\n    x = 1\n    x = \"s\"\n    return 0\n")
+
+report("retyping a for-loop target rejected", "def bad() -> int:\n    for x in [1, 2, 3]:\n        pass\n    for x in [true, false]:\n        pass\n    return 0\n")
+
+report("wrong return type rejected", "def bad() -> int:\n    return \"s\"\n")
+
+report("bare return in a non-void function rejected", "def bad() -> int:\n    return\n")
+
+report("return outside a function rejected", "x = 1\nreturn x\n")
+
+report("if condition must be bool", "def bad() -> int:\n    if 5:\n        pass\n    return 0\n")
+
+report("while condition must be bool", "def bad() -> int:\n    while \"s\":\n        pass\n    return 0\n")
+
+report("an omitted return type means -> none", "def ok():\n    print(1)\n\ndef bad() -> int:\n    ok()\n    return 1\n")
+
+report("returning a value from an (implicitly -> none) unannotated function rejected", "def bad():\n    return 1\n")
+
+report("function falling off its end without returning rejected", "def bad() -> int:\n    x = 1\n")
+
+report("if without else falling through rejected", "def bad(n: int) -> int:\n    if n > 0:\n        return 1\n")
+
+report("if/elif/else that all return still passes", "def ok(n: int) -> int:\n    if n > 0:\n        return 1\n    elif n < 0:\n        return 2\n    else:\n        return 3\n")
+
+report("break outside a loop rejected", "def bad() -> int:\n    break\n    return 0\n")
+
+report("continue outside a loop rejected", "def bad() -> int:\n    continue\n    return 0\n")
+
+report("break in a loop's if_broken with no outer loop rejected", "def bad() -> int:\n    for x in [1, 2, 3]:\n        break\n    if_broken:\n        break\n    return 0\n")
+
+report("break in a nested loop's if_broken re-breaking the outer loop still passes", "def ok() -> int:\n    for row in [1, 2, 3]:\n        for col in [1, 2, 3]:\n            break\n        if_broken:\n            break\n    return 0\n")
+
+report("redefining a builtin rejected", "def len(s: str) -> int:\n    return 42\ndef main() -> int:\n    print(len(\"abc\"))\n    return 0\n")
+
+report("string indexing is supported", "def bad() -> int:\n    s = \"abc\"\n    c = s[0]\n    print(c)\n    return 0\n")
+
+report("indexing a non-str rejected", "def bad() -> int:\n    x = 5\n    c = x[0]\n    return 0\n")
+
+report("indexing with a non-int index rejected", "def bad() -> int:\n    s = \"abc\"\n    c = s[\"x\"]\n    return 0\n")
+
+report("typed empty list, append, index, and len are supported", "def ok() -> int:\n    xs: list[int] = []\n    xs.append(1)\n    print(xs[0])\n    print(len(xs))\n    return 0\n")
+
+report("appending the wrong type rejected", "def bad() -> int:\n    xs: list[int] = []\n    xs.append(\"s\")\n    return 0\n")
+
+report("empty list without a declared type rejected", "def bad() -> int:\n    xs = []\n    return 0\n")
+
+report("print() of a list rejected", "def bad() -> int:\n    xs: list[int] = []\n    print(xs)\n    return 0\n")
+
+report("nested list[list[int]] rejected", "def bad() -> int:\n    xs: list[list[int]] = []\n    return 0\n")
+
+report("a list-typed class field is supported", "class Bag:\n    items: list[int]\n\ndef ok() -> int:\n    return 0\n")
+
+report("print() of a class with a list-typed field rejected", "class Bag:\n    items: list[int]\n\ndef bad() -> int:\n    xs: list[int] = []\n    b = Bag(xs)\n    print(b)\n    return 0\n")
+
+report("attribute assignment is supported", "class P:\n    x: int\n\ndef ok() -> int:\n    p = P(1)\n    p.x = 2\n    print(p.x)\n    return 0\n")
+
+report("attribute assignment with the wrong field type rejected", "class P:\n    x: int\n\ndef bad() -> int:\n    p = P(1)\n    p.x = \"s\"\n    return 0\n")
+
+report("attribute assignment to an unknown field rejected", "class P:\n    x: int\n\ndef bad() -> int:\n    p = P(1)\n    p.z = 2\n    return 0\n")
+
+report("attribute assignment on a non-class value rejected", "def bad() -> int:\n    x = 5\n    x.y = 2\n    return 0\n")
+
+report("binding a none-typed call result rejected", "def foo():\n    print(1)\n\ndef bad() -> int:\n    x = foo()\n    return 0\n")
+
+report("printing a none-typed call result rejected", "def foo():\n    print(1)\n\ndef bad() -> int:\n    print(foo())\n    return 0\n")
+
+report("a none parameter type rejected", "def bad(x: none) -> int:\n    return 0\n")
+
+report("a none field type rejected", "class Bad:\n    x: none\n\ndef ok() -> int:\n    return 0\n")
+
+report("a method reading and mutating self's fields is supported", "class Counter:\n    value: int\n\n    def get(self) -> int:\n        return self.value\n\n    def increment(self):\n        self.value = self.value + 1\n\ndef ok() -> int:\n    c = Counter(0)\n    c.increment()\n    print(c.get())\n    return 0\n")
+
+report("a method calling another method is supported", "class Point:\n    x: int\n    y: int\n\n    def total(self) -> int:\n        return self.x + self.y\n\n    def doubled(self) -> int:\n        return self.total() * 2\n\ndef ok() -> int:\n    p = Point(1, 2)\n    print(p.doubled())\n    return 0\n")
+
+report("a method must take self as its first parameter", "class Bad:\n    x: int\n\n    def foo(n: int) -> int:\n        return n\n\ndef ok() -> int:\n    return 0\n")
+
+report("an explicit type annotation on self is rejected", "class Bad:\n    x: int\n\n    def foo(self: !Bad) -> int:\n        return self.x\n\ndef ok() -> int:\n    return 0\n")
+
+report("calling an unknown method is rejected", "class P:\n    x: int\n\ndef bad() -> int:\n    p = P(1)\n    p.unknown_method()\n    return 0\n")
+
+report("calling a method with the wrong argument type is rejected", "class Adder:\n    base: int\n\n    def add(self, n: int) -> int:\n        return self.base + n\n\ndef bad() -> int:\n    a = Adder(1)\n    a.add(\"s\")\n    return 0\n")
+
+report("a duplicate method name is rejected", "class Bad:\n    x: int\n\n    def foo(self) -> int:\n        return 1\n\n    def foo(self) -> int:\n        return 2\n\ndef ok() -> int:\n    return 0\n")
+
+report("list.pop() is supported", "def ok() -> int:\n    xs: list[int] = []\n    xs.append(1)\n    x = xs.pop()\n    print(x)\n    return 0\n")
+
+report("list.pop() with an argument is rejected", "def bad() -> int:\n    xs: list[int] = []\n    xs.pop(1)\n    return 0\n")
+
+report("dict[str, V] literal and .get() are supported", "def ok() -> int:\n    d: dict[str, str] = {\n        \"a\": \"A\",\n        \"b\": \"B\",\n    }\n    print(d.get(\"a\", \"?\"))\n    print(d.get(\"z\", \"?\"))\n    return 0\n")
+
+report("empty dict[str, V] literal with a declared type is supported", "def ok() -> int:\n    d: dict[str, int] = {:}\n    print(d.get(\"a\", 0))\n    return 0\n")
+
+report("empty dict literal without a declared type is rejected", "def bad() -> int:\n    d = {:}\n    return 0\n")
+
+report("a dict literal with a non-str key is rejected", "def bad() -> int:\n    d = {1: \"a\"}\n    return 0\n")
+
+report("dict.get() with the wrong argument types is rejected", "def bad() -> int:\n    d: dict[str, int] = {:}\n    d.get(1, 0)\n    return 0\n")
+
+report("print() of a dict is rejected", "def bad() -> int:\n    d: dict[str, int] = {:}\n    print(d)\n    return 0\n")
+
+report("a module-level variable is readable inside a function", "x: int = 5\n\ndef ok() -> int:\n    return x + 1\n\nprint(ok())\n")
+
+report("a module-level variable is readable inside a class method", "keywords: dict[str, str] = {\n    \"true\": \"TRUE\",\n}\n\nclass Lexer:\n    pos: int\n\n    def lookup(self, text: str) -> str:\n        return keywords.get(text, \"IDENT\")\n\nl = Lexer(0)\nprint(l.lookup(\"true\"))\n")
+
+report("a local assignment shadows a module-level name of the same type", "count: int = 0\n\ndef ok() -> int:\n    count = 5\n    return count\n\nprint(ok())\nprint(count)\n")
+
+report("a method returning T | none, narrowed by match, is supported", "class Item:\n    value: int\n\nclass Holder:\n    item: Item\n\n    def maybe(self, present: bool) -> Item | none:\n        if present:\n            return self.item\n        return none\n\ndef ok() -> int:\n    h = Holder(Item(1))\n    match h.maybe(true) as result:\n        case Item:\n            print(result.value)\n        case none:\n            print(0)\n    return 0\n")
+
+report("a method returning T | ErrorClass, narrowed by match, is supported", "class Item:\n    value: int\n\nclass ItemError:\n    message: str\n\nclass Holder:\n    item: Item\n\n    def get(self, ok: bool) -> Item | ItemError:\n        if ok:\n            return self.item\n        return ItemError(\"missing\")\n\ndef ok() -> int:\n    h = Holder(Item(1))\n    match h.get(true) as result:\n        case Item:\n            print(result.value)\n        case ItemError:\n            print(result.message)\n    return 0\n")
+
+report("'?' propagation is supported", "class Item:\n    value: int\n\nclass ItemError:\n    message: str\n\ndef get_item(ok: bool) -> Item | ItemError:\n    if ok:\n        return Item(1)\n    return ItemError(\"missing\")\n\ndef use_item(ok: bool) -> int | ItemError:\n    item = get_item(ok)?\n    return item.value\n\ndef ok() -> int:\n    use_item(true)\n    return 0\n")
+
+report("'?' propagation as a return statement's own value is supported", "class Item:\n    value: int\n\nclass ItemError:\n    message: str\n\ndef get_item(ok: bool) -> Item | ItemError:\n    if ok:\n        return Item(1)\n    return ItemError(\"missing\")\n\ndef use_item(ok: bool) -> Item | ItemError:\n    return get_item(ok)?\n\ndef ok() -> int:\n    use_item(true)\n    return 0\n")
+
+report("'?' propagation as a bare expression statement is supported", "class ItemError:\n    message: str\n\ndef validate(ok: bool) -> none | ItemError:\n    if ok:\n        return none\n    return ItemError(\"bad\")\n\ndef use_it(ok: bool) -> int | ItemError:\n    validate(ok)?\n    return 42\n\ndef ok() -> int:\n    use_it(true)\n    return 0\n")
+
+report("a local variable can be bound directly to a union-typed value", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef ok() -> int:\n    x = maybe_item(true)\n    match x as result:\n        case Item:\n            print(result.value)\n        case none:\n            print(0)\n    return 0\n")
+
+report("an empty list literal as a constructor argument infers from the field's declared type", "class Box:\n    items: list[int]\n    count: int\n\ndef ok() -> int:\n    b = Box([], 0)\n    print(len(b.items))\n    return 0\n")
+
+report("a union-typed field is supported", "class Item:\n    value: int\n\nclass Holder:\n    payload: Item | none\n\ndef ok() -> int:\n    h = Holder(Item(1))\n    match h.payload as p:\n        case Item:\n            print(p.value)\n        case none:\n            print(0)\n    h.payload = none\n    return 0\n")
+
+report("print() of a class with a union-typed field is rejected", "class Item:\n    value: int\n\nclass Holder:\n    payload: Item | none\n\ndef bad() -> int:\n    h = Holder(Item(1))\n    print(h)\n    return 0\n")
+
+report("a union-typed parameter with no call site is still just supported, not exercised", "class Item:\n    value: int\n\ndef ok(x: Item | none) -> int:\n    return 0\n")
+
+report("print() of a union-typed value is rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    print(maybe_item(true))\n    return 0\n")
+
+report("'?' on a non-union type is rejected", "def get() -> int:\n    return 5\n\ndef bad() -> int:\n    x = get()?\n    return x\n")
+
+report("'?' on a union with no error variant is rejected", "def get(flag: bool) -> int | bool:\n    if flag:\n        return 1\n    return true\n\ndef bad() -> int:\n    x = get(true)?\n    return x\n")
+
+report("'?' on a union with more than one error variant is rejected", "class FooError:\n    message: str\n\nclass BarError:\n    message: str\n\ndef get(flag: bool) -> int | FooError | BarError:\n    if flag:\n        return 1\n    return FooError(\"bad\")\n\ndef bad() -> int:\n    x = get(true)?\n    return x\n")
+
+report("'?' on a union with more than one non-error member is supported", "class FooError:\n    message: str\n\ndef get(flag: bool) -> int | bool | FooError:\n    if flag:\n        return 1\n    return FooError(\"bad\")\n\ndef ok() -> int | bool | FooError:\n    x = get(true)?\n    return x\n")
+
+report("'?' whose error type the enclosing function's return type doesn't include is rejected", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef bad() -> int:\n    x = get(true)?\n    return x\n")
+
+report("'?' used outside a function is rejected", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\nx = get(true)?\n")
+
+report("'?' as a Binary operand is supported (hoisted ahead of the statement)", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef use_it(flag: bool) -> int | ItemError:\n    x = get(flag)? + 1\n    return x\n\ndef ok() -> int:\n    use_it(true)\n    return 0\n")
+
+report("'?' as a Call argument is supported (hoisted ahead of the statement)", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef use_it(flag: bool) -> int | ItemError:\n    xs: list[int] = []\n    xs.append(get(flag)?)\n    return xs[0]\n\ndef ok() -> int:\n    use_it(true)\n    return 0\n")
+
+report("'?' inside 'and'/'or' is still rejected (the right operand isn't always evaluated)", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef bad() -> bool:\n    x = true and get(true)? == 1\n    return x\n")
+
+report("'?' nested two levels deep in an expression is still rejected", "class ItemError:\n    message: str\n\ndef get(flag: bool) -> int | ItemError:\n    if flag:\n        return 1\n    return ItemError(\"bad\")\n\ndef bad() -> int | ItemError:\n    x = (get(true)? + 1) + 2\n    return x\n")
+
+report("match on a non-union subject is rejected", "def ok() -> int:\n    x = 5\n    match x as result:\n        case _:\n            print(result)\n    return 0\n")
+
+report("a non-exhaustive match on a union is rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    match maybe_item(true) as result:\n        case Item:\n            print(result.value)\n    return 0\n")
+
+report("a match arm guard is rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    match maybe_item(true) as result:\n        case Item if true:\n            print(result.value)\n        case none:\n            print(0)\n    return 0\n")
+
+report("a match pattern type that isn't part of the subject union is rejected", "class Item:\n    value: int\n\nclass Other:\n    n: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    match maybe_item(true) as result:\n        case Other:\n            print(result.n)\n        case none:\n            print(0)\n    return 0\n")
+
+report("a name declared as a union type can be reassigned a narrower member, and back", "class Item:\n    value: int\n\ndef ok() -> int:\n    x: Item | none = none\n    x = Item(1)\n    x = none\n    match x as r:\n        case Item:\n            print(r.value)\n        case none:\n            print(0)\n    return 0\n")
+
+report("reassigning a plain-typed name to a union value is still rejected", "class Item:\n    value: int\n\ndef maybe_item(present: bool) -> Item | none:\n    if present:\n        return Item(1)\n    return none\n\ndef bad() -> int:\n    x = Item(1)\n    x = maybe_item(true)\n    return 0\n")
+
+report("a class imported from another self-host/ file is a known type", "from .lexer import Token\n\ndef ok() -> int:\n    t = Token(\"INT\", \"5\", 1, 1)\n    print(t.kind, t.text)\n    return 0\n")
+
+report("a subclass's Construct call takes the parent's own fields first, then its own", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef ok() -> int:\n    n = NumberNode(1, 42)\n    print(n.id, n.value)\n    return 0\n")
+
+report("a subclass value satisfies a base-class-typed return", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef make(id: int, value: int) -> Node:\n    return NumberNode(id, value)\n\ndef ok() -> int:\n    n = make(1, 2)\n    print(n.id)\n    return 0\n")
+
+report("a subclass value satisfies a base-class-containing union return", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass NodeError:\n    message: str\n\ndef make(id: int, ok: bool) -> Node | NodeError:\n    if ok:\n        return NumberNode(id, 1)\n    return NodeError(\"bad\")\n\ndef ok() -> int:\n    match make(1, true) as result:\n        case Node:\n            print(result.id)\n        case NodeError:\n            print(result.message)\n    return 0\n")
+
+report("a subclass Construct call missing the parent's own field is rejected", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef bad() -> int:\n    n = NumberNode(42)\n    return 0\n")
+
+report("a class with more than one base is rejected", "class A:\n    x: int\n\nclass B:\n    y: int\n\nclass Bad(A, B):\n    z: int\n\ndef ok() -> int:\n    return 0\n")
+
+report("an unrelated class does not satisfy a base-class-typed return", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass Other:\n    n: int\n\ndef bad() -> Node:\n    return Other(1)\n")
+
+report("matching a sealed class hierarchy by its own concrete subclasses is supported", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass NameNode(Node):\n    name: str\n\ndef describe(n: Node) -> int:\n    match n as result:\n        case NumberNode:\n            return result.value\n        case _:\n            return -1\n\ndef ok() -> int:\n    print(describe(NumberNode(1, 42)))\n    print(describe(NameNode(2, \"x\")))\n    return 0\n")
+
+report("a subtype value satisfies a plain function's base-class-typed parameter", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef describe(n: Node) -> int:\n    return n.id\n\ndef ok() -> int:\n    print(describe(NumberNode(1, 42)))\n    return 0\n")
+
+report("a subtype value satisfies a list.append() base-class-typed element type", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef ok() -> int:\n    nodes: list[Node] = []\n    nodes.append(NumberNode(1, 42))\n    print(len(nodes))\n    return 0\n")
+
+report("a match pattern outside the subject's own sealed hierarchy is rejected", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass Other:\n    n: int\n\ndef bad(n: Node) -> int:\n    match n as result:\n        case Other:\n            return result.n\n        case _:\n            return 0\n    return 0\n")
+
+report("a sealed class hierarchy match without a trailing wildcard, covering every concrete subclass, is supported", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\ndef ok(n: Node) -> int:\n    match n as result:\n        case NumberNode:\n            return result.value\n    return 0\n")
+
+report("a sealed class hierarchy match without a trailing wildcard, missing a case, is rejected", "sealed class Node:\n    id: int\n\nclass NumberNode(Node):\n    value: int\n\nclass NameNode(Node):\n    name: str\n\ndef bad(n: Node) -> int:\n    match n as result:\n        case NumberNode:\n            return result.value\n    return 0\n")
+
+report("a union return type that's a strict subset of another is supported", "class Result:\n    value: int\n\nclass ItemError:\n    message: str\n\nclass OtherError:\n    message: str\n\ndef inner(ok: bool) -> Result | ItemError:\n    if ok:\n        return Result(1)\n    return ItemError(\"bad\")\n\ndef outer(ok: bool) -> Result | ItemError | OtherError:\n    return inner(ok)\n\ndef ok() -> int:\n    match outer(true) as r:\n        case Result:\n            print(r.value)\n        case ItemError:\n            print(r.message)\n        case OtherError:\n            print(r.message)\n    return 0\n")
+
+report("a union-typed parameter is supported", "class Item:\n    value: int\n\ndef describe(x: Item | none) -> int:\n    match x as result:\n        case Item:\n            return result.value\n        case none:\n            return -1\n\ndef ok() -> int:\n    print(describe(Item(5)))\n    print(describe(none))\n    return 0\n")
+
+report("dict item assignment is supported, including overwriting an existing key", "class Item:\n    value: int\n\ndef ok() -> int:\n    reg: dict[str, Item] = {:}\n    reg[\"a\"] = Item(1)\n    reg[\"a\"] = Item(2)\n    match reg.get(\"a\", none) as found:\n        case Item:\n            print(found.value)\n        case none:\n            print(-1)\n    return 0\n")
+
+report("list[T] index assignment with a non-int index is rejected", "def bad() -> int:\n    xs: list[int] = [1, 2]\n    xs[\"a\"] = 1\n    return 0\n")
+
+report("index assignment on a receiver that's neither dict[str, T] nor list[T] is rejected", "def bad() -> int:\n    x: int = 5\n    x[\"a\"] = 1\n    return 0\n")
+
+report("a direct dict[str, T] index read is supported", "def ok() -> int:\n    d: dict[str, int] = {\"a\": 1}\n    print(d[\"a\"])\n    return 0\n")
+
+report("set[str] with add() and in/not in is supported", "def ok() -> int:\n    seen: set[str] = {}\n    seen.add(\"a\")\n    print(\"a\" in seen)\n    print(\"b\" not in seen)\n    return 0\n")
+
+report("set.add() with the wrong element type is rejected", "def bad() -> int:\n    seen: set[str] = {}\n    seen.add(1)\n    return 0\n")
+
+report("str.endswith() is supported", "def ok() -> int:\n    print(\"FooError\".endswith(\"Error\"))\n    print(\"Foo\".endswith(\"Error\"))\n    return 0\n")
+
+report("str.endswith() with a non-str argument is rejected", "def bad() -> bool:\n    return \"Foo\".endswith(1)\n")
+
+report("sorted() on a list[str] is supported", "def ok() -> int:\n    xs: list[str] = [\"b\", \"a\"]\n    ys = sorted(xs)\n    print(ys[0])\n    print(xs[0])\n    return 0\n")
+
+report("sorted() on a non-list[str] argument is rejected", "def bad() -> int:\n    xs: list[int] = [2, 1]\n    ys = sorted(xs)\n    return 0\n")
+
+report("comparing a union against a value of a type it doesn't contain is rejected", "def maybe(ok: bool) -> str | none:\n    if ok:\n        return \"x\"\n    return none\n\ndef bad(ok: bool) -> bool:\n    return maybe(ok) == 1\n")
+
+report("for-loop iteration over a dict's own keys is supported", "def ok() -> int:\n    d: dict[str, int] = {\"a\": 1, \"b\": 2}\n    total = 0\n    for k in d:\n        total = total + 1\n    print(total)\n    return 0\n")
+
+report("for-loop iteration over an arbitrary call's own list return value is supported", "def make_list() -> list[int]:\n    xs: list[int] = [1, 2, 3]\n    return xs\n\ndef ok() -> int:\n    total = 0\n    for n in make_list():\n        total = total + n\n    print(total)\n    return 0\n")
+
+report("str.replace() is supported", "def ok() -> int:\n    print(\"a.b.a\".replace(\".\", \"_\"))\n    return 0\n")
+
+report("str.replace() with a non-str argument is rejected", "def bad() -> str:\n    return \"a.b\".replace(\".\", 1)\n")
+
+report("bidirectional empty-literal inference for a method-call argument is supported", "class Bag:\n    prefix: str\n\n    def combine(self, items: list[str]) -> str:\n        result = self.prefix\n        for item in items:\n            result = result + item\n        return result\n\ndef ok() -> int:\n    b = Bag(\"x:\")\n    print(b.combine([]))\n    return 0\n")
+
+report("float arithmetic and comparison operators are supported", "def ok() -> int:\n    x: float = 3.5\n    y: float = 1.5\n    print(x + y)\n    print(x - y)\n    print(x * y)\n    print(x < y)\n    print(x == y)\n    print(x != y)\n    return 0\n")
+
+report("a float operand mixed with an int operand is rejected", "def bad(x: float) -> float:\n    return x + 1\n")
+
+report("/ (true division) is supported on two ints or two floats", "def ok() -> int:\n    print(7 / 2)\n    x: float = 7.0\n    y: float = 2.0\n    print(x / y)\n    return 0\n")
+
+report("/ on mismatched operand types is rejected", "def bad(x: float) -> float:\n    return x / 2\n")
+
+report("** (power) is supported on two ints", "def ok() -> int:\n    print(2 ** 10)\n    return 0\n")
+
+report("** on a non-int operand is rejected", "def bad(x: float) -> float:\n    return x ** 2\n")
+
+report("list[T] index assignment is supported", "def ok() -> int:\n    xs: list[int] = [1, 2, 3]\n    xs[1] = 99\n    print(xs[1])\n    return 0\n")
+
+report("list[T] index assignment with the wrong value type is rejected", "def bad() -> int:\n    xs: list[int] = [1, 2, 3]\n    xs[1] = \"x\"\n    return 0\n")
+
+report("str(bool)/int(float)/float(int) conversions are supported", "def ok() -> int:\n    print(str(true))\n    print(int(3.7))\n    print(float(5))\n    return 0\n")
+
+report("len() on a dict[str, T] is supported", "def ok() -> int:\n    d: dict[str, int] = {\"a\": 1, \"b\": 2}\n    print(len(d))\n    return 0\n")
+
+report("'?' as a match statement's own subject is supported", "class Item:\n    value: int\n\nclass ItemError:\n    message: str\n\ndef maybe(n: int) -> Item | none | ItemError:\n    if n < 0:\n        return ItemError(\"bad\")\n    if n == 0:\n        return none\n    return Item(n)\n\ndef ok(n: int) -> int | ItemError:\n    match maybe(n)? as v:\n        case Item:\n            return v.value\n        case none:\n            return 0\n")

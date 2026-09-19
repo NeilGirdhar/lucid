@@ -1,0 +1,908 @@
+# A tree-walking evaluator for self-host/ast.lucid, written in Lucid:
+# runs a parsed program directly, without a checker or codegen pass in
+# between. Together with lexer.lucid and parser.lucid this is enough to
+# take real Lucid source, as text, all the way to a printed result,
+# entirely through code written in Lucid and run by the reference
+# interpreter -- see interpreter_demo.lucid for the source-to-output
+# proof.
+#
+# Deliberately a small subset of the full language, not at feature
+# parity with compiler/crates/lucid-runtime -- what's covered is enough
+# to run real, non-trivial programs, including self-host/lexer.lucid
+# itself (see self_hosting_demo.lucid); everything below is left for
+# later:
+#   - traits, dispatch, exceptions/try/except (single-parent *field*
+#     inheritance works: a subclass's ClassInfo prepends its one
+#     registered class parent's field_names -- but *method* inheritance
+#     doesn't: call_method only ever looks in the receiver's own class's
+#     methods dict, no walk up the parent chain, so a method declared on
+#     a class parent and called on a subclass instance fails)
+#   - set values and literals (dict/list values and literals work);
+#     slicing (plain single-index get/set on list/str/dict works)
+#   - match: only a `case ClassName:` / `case none:` / `case _:` /
+#     `case some_name:` arm's pattern is understood (no guards, no
+#     destructuring, no literal patterns besides `none`)
+#   - keyword-only args on a Construct/Call beyond a class's field order
+#     (Construct binds positional args to field-declaration order only)
+#   - imports, comprehensions, generators, async, context managers
+#   - closures over anything but a call's own parameters (no captured
+#     enclosing-function locals; only globals + the current call's own
+#     bindings are visible)
+#   - keyword/variadic/default parameters on a plain function (positional
+#     only)
+#   - numeric cross-type comparison (3 == 3.0 is false here, since it
+#     compares an IntValue to a FloatValue structurally, not numerically)
+
+from .ast import dummy_span, Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, DictEntry, Arg, LiteralValue, IntLit, FloatLit, StrLit, BoolLit, NoneLit, Stmt, FunctionStmt, VarDef, Assignment, If, While, For, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, ClassDef, ClassMember, FieldMember, MethodMember, Import, FromImport, Pattern, IdentPattern, WildcardPattern, TypePattern, LiteralPattern, TypeExpr, NamedType, FunctionDef, Param, Span
+
+sealed class Value:
+    pass
+
+class IntValue(Value):
+    value: int
+
+class FloatValue(Value):
+    value: float
+
+class StrValue(Value):
+    value: str
+
+class BoolValue(Value):
+    value: bool
+
+class NoneValue(Value):
+    pass
+
+class ListValue(Value):
+    items: list[Value]
+
+class DictValue(Value):
+    entries: dict[str, Value]
+
+class ObjectValue(Value):
+    class_name: str
+    fields: dict[str, Value]
+
+class PropagatedValue(Value):
+    # A `?` whose inner expression evaluated to an error-shaped value
+    # (an ObjectValue whose class name ends in "Error" -- the same
+    # name-suffix convention compiler/crates/lucid-runtime uses) wraps it
+    # in this sentinel rather than returning it plainly. Every site that
+    # evaluates a subexpression and does something with the result other
+    # than immediately returning it (a statement's own value, yes; an
+    # operand of a larger expression, no) must check for this sentinel
+    # and re-propagate it -- exactly the class of bug documented in
+    # ../self-host/README.md's "`?` silently no-op'd inside a nested
+    # expression" section, now on this interpreter's own end. Call/
+    # construct arguments and list/dict literal elements bubble a
+    # PropagatedValue back up as their own expression's result (matching
+    # parser.lucid's own `body.append(self.parse_class_member()?)`
+    # idiom, used throughout it); binary/unary operands and attribute/
+    # index receivers don't yet -- `?` there surfaces a clear, specific
+    # EvalError naming the position, rather than silently discarding the
+    # propagated value the way the runtime bug did.
+    inner: Value
+
+class EvalError:
+    message: str
+    span: Span
+
+class ClassInfo:
+    field_names: list[str]
+    methods: dict[str, FunctionDef]
+
+sealed class Signal:
+    pass
+
+class NormalSignal(Signal):
+    pass
+
+class ReturnSignal(Signal):
+    value: Value
+
+class BreakSignal(Signal):
+    pass
+
+class ContinueSignal(Signal):
+    pass
+
+class Env:
+    vars: dict[str, Value]
+
+def new_env() -> Env:
+    return Env({:})
+
+def env_get(env: Env, name: str) -> Value | none:
+    return env.vars.get(name, none)
+
+def env_set(env: Env, name: str, value: Value):
+    env.vars[name] = value
+
+def value_to_str(v: Value) -> str:
+    match v as result:
+        case IntValue:
+            return str(result.value)
+        case FloatValue:
+            return str(result.value)
+        case StrValue:
+            return result.value
+        case BoolValue:
+            return str(result.value)
+        case NoneValue:
+            return "none"
+        case ListValue:
+            parts: list[str] = []
+            for item in result.items:
+                parts.append(value_to_str(item))
+            text = "["
+            i = 0
+            while i < len(parts):
+                if i > 0:
+                    text = text + ", "
+                text = text + parts[i]
+                i = i + 1
+            return text + "]"
+        case DictValue:
+            return "{...}"
+        case ObjectValue:
+            return result.class_name + "(...)"
+        case PropagatedValue:
+            return value_to_str(result.inner)
+
+def value_is_truthy(v: Value) -> bool:
+    match v as result:
+        case IntValue:
+            return result.value != 0
+        case FloatValue:
+            return result.value != 0.0
+        case StrValue:
+            return len(result.value) > 0
+        case BoolValue:
+            return result.value
+        case NoneValue:
+            return false
+        case ListValue:
+            return len(result.items) > 0
+        case DictValue:
+            return len(result.entries) > 0
+        case ObjectValue:
+            return true
+        case PropagatedValue:
+            return value_is_truthy(result.inner)
+
+def values_structurally_equal(a: Value, b: Value) -> bool:
+    match a as left:
+        case IntValue:
+            match b as right:
+                case IntValue:
+                    return left.value == right.value
+                case _:
+                    return false
+        case FloatValue:
+            match b as right:
+                case FloatValue:
+                    return left.value == right.value
+                case _:
+                    return false
+        case StrValue:
+            match b as right:
+                case StrValue:
+                    return left.value == right.value
+                case _:
+                    return false
+        case BoolValue:
+            match b as right:
+                case BoolValue:
+                    return left.value == right.value
+                case _:
+                    return false
+        case NoneValue:
+            match b as right:
+                case NoneValue:
+                    return true
+                case _:
+                    return false
+        case ListValue:
+            return false
+        case DictValue:
+            return false
+        case ObjectValue:
+            # Deferred: structural equality across every field, the way
+            # every class gets automatically for real. Not needed by
+            # lexer.lucid (no Token/LexError instance is ever compared
+            # with `==`); `is`/identity would need reference semantics
+            # this evaluator doesn't track either.
+            return false
+        case PropagatedValue:
+            return values_structurally_equal(left.inner, b)
+
+def reject_propagated(v: Value, span: Span, position: str) -> Value | EvalError:
+    match v as pv:
+        case PropagatedValue:
+            return EvalError("'?' is only supported directly as a statement's own value expression, not nested inside " + position, span)
+        case _:
+            return v
+
+def value_looks_like_error(value: Value) -> bool:
+    match value as v:
+        case ObjectValue:
+            return v.class_name.endswith("Error")
+        case _:
+            return false
+
+def value_matches_type_name(value: Value, name: str) -> bool:
+    match value as v:
+        case ObjectValue:
+            return v.class_name == name
+        case IntValue:
+            return name == "int"
+        case FloatValue:
+            return name == "float"
+        case StrValue:
+            return name == "str"
+        case BoolValue:
+            return name == "bool"
+        case NoneValue:
+            return name == "none"
+        case ListValue:
+            return name == "list"
+        case DictValue:
+            return name == "dict"
+        case PropagatedValue:
+            return value_matches_type_name(v.inner, name)
+
+def pattern_matches(pattern: Pattern, value: Value) -> bool:
+    match pattern as p:
+        case WildcardPattern:
+            return true
+        case IdentPattern:
+            return true
+        case TypePattern:
+            match p.type_expr as te:
+                case NamedType:
+                    return value_matches_type_name(value, te.name)
+                case _:
+                    return false
+        case LiteralPattern:
+            match p.value as lit:
+                case NoneLit:
+                    match value as v:
+                        case NoneValue:
+                            return true
+                        case _:
+                            return false
+                case _:
+                    return false
+        case _:
+            return false
+
+class Interpreter:
+    functions: dict[str, FunctionDef]
+    classes: dict[str, ClassInfo]
+    globals: Env
+
+    def eval_literal(self, lit: LiteralValue, span: Span) -> Value | EvalError:
+        match lit as result:
+            case IntLit:
+                return IntValue(result.value)
+            case FloatLit:
+                return FloatValue(result.value)
+            case StrLit:
+                return StrValue(result.value)
+            case BoolLit:
+                return BoolValue(result.value)
+            case NoneLit:
+                return NoneValue()
+            case _:
+                return EvalError("unsupported literal kind", span)
+
+    def eval_binary(self, op: str, left: Value, right: Value, span: Span) -> Value | EvalError:
+        if op == "AND":
+            if not value_is_truthy(left):
+                return left
+            return right
+        if op == "OR":
+            if value_is_truthy(left):
+                return left
+            return right
+        if op == "EQ":
+            return BoolValue(values_structurally_equal(left, right))
+        if op == "NOT_EQ":
+            return BoolValue(not values_structurally_equal(left, right))
+
+        match left as l:
+            case IntValue:
+                match right as r:
+                    case IntValue:
+                        if op == "ADD":
+                            return IntValue(l.value + r.value)
+                        if op == "SUB":
+                            return IntValue(l.value - r.value)
+                        if op == "MUL":
+                            return IntValue(l.value * r.value)
+                        if op == "FLOOR_DIV":
+                            if r.value == 0:
+                                return EvalError("division by zero", span)
+                            return IntValue(l.value // r.value)
+                        if op == "MOD":
+                            if r.value == 0:
+                                return EvalError("division by zero", span)
+                            return IntValue(l.value % r.value)
+                        if op == "DIV":
+                            if r.value == 0:
+                                return EvalError("division by zero", span)
+                            return FloatValue(l.value / r.value)
+                        if op == "POW":
+                            return IntValue(l.value ** r.value)
+                        if op == "LT":
+                            return BoolValue(l.value < r.value)
+                        if op == "LT_EQ":
+                            return BoolValue(l.value <= r.value)
+                        if op == "GT":
+                            return BoolValue(l.value > r.value)
+                        if op == "GT_EQ":
+                            return BoolValue(l.value >= r.value)
+                        return EvalError("unsupported operator " + op + " on int", span)
+                    case _:
+                        return EvalError("type mismatch in binary operator " + op, span)
+            case FloatValue:
+                match right as r:
+                    case FloatValue:
+                        if op == "ADD":
+                            return FloatValue(l.value + r.value)
+                        if op == "SUB":
+                            return FloatValue(l.value - r.value)
+                        if op == "MUL":
+                            return FloatValue(l.value * r.value)
+                        if op == "DIV":
+                            if r.value == 0.0:
+                                return EvalError("division by zero", span)
+                            return FloatValue(l.value / r.value)
+                        if op == "LT":
+                            return BoolValue(l.value < r.value)
+                        if op == "LT_EQ":
+                            return BoolValue(l.value <= r.value)
+                        if op == "GT":
+                            return BoolValue(l.value > r.value)
+                        if op == "GT_EQ":
+                            return BoolValue(l.value >= r.value)
+                        return EvalError("unsupported operator " + op + " on float", span)
+                    case _:
+                        return EvalError("type mismatch in binary operator " + op, span)
+            case StrValue:
+                match right as r:
+                    case StrValue:
+                        if op == "ADD":
+                            return StrValue(l.value + r.value)
+                        if op == "LT":
+                            return BoolValue(l.value < r.value)
+                        if op == "LT_EQ":
+                            return BoolValue(l.value <= r.value)
+                        if op == "GT":
+                            return BoolValue(l.value > r.value)
+                        if op == "GT_EQ":
+                            return BoolValue(l.value >= r.value)
+                        return EvalError("unsupported operator " + op + " on str", span)
+                    case _:
+                        return EvalError("type mismatch in binary operator " + op, span)
+            case _:
+                return EvalError("unsupported operand type for " + op, span)
+
+    def eval_unary(self, op: str, inner: Value, span: Span) -> Value | EvalError:
+        if op == "NOT":
+            return BoolValue(not value_is_truthy(inner))
+        match inner as result:
+            case IntValue:
+                if op == "NEG":
+                    return IntValue(0 - result.value)
+                if op == "POS":
+                    return result
+            case FloatValue:
+                if op == "NEG":
+                    return FloatValue(0.0 - result.value)
+                if op == "POS":
+                    return result
+            case _:
+                pass
+        return EvalError("unsupported unary operator " + op, span)
+
+    def call_builtin(self, name: str, args: list[Value], span: Span) -> Value | none | EvalError:
+        if name == "print":
+            parts: list[str] = []
+            for a in args:
+                parts.append(value_to_str(a))
+            line = ""
+            i = 0
+            while i < len(parts):
+                if i > 0:
+                    line = line + " "
+                line = line + parts[i]
+                i = i + 1
+            print(line)
+            return NoneValue()
+        if name == "len":
+            if len(args) != 1:
+                return EvalError("len() takes exactly one argument", span)
+            match args[0] as result:
+                case StrValue:
+                    return IntValue(len(result.value))
+                case ListValue:
+                    return IntValue(len(result.items))
+                case _:
+                    return EvalError("len() unsupported for this value", span)
+        if name == "str":
+            if len(args) != 1:
+                return EvalError("str() takes exactly one argument", span)
+            return StrValue(value_to_str(args[0]))
+        if name == "int":
+            if len(args) != 1:
+                return EvalError("int() takes exactly one argument", span)
+            match args[0] as result:
+                case StrValue:
+                    return IntValue(int(result.value))
+                case FloatValue:
+                    return IntValue(int(result.value))
+                case IntValue:
+                    return result
+                case _:
+                    return EvalError("int() unsupported for this value", span)
+        if name == "float":
+            if len(args) != 1:
+                return EvalError("float() takes exactly one argument", span)
+            match args[0] as result:
+                case StrValue:
+                    return FloatValue(float(result.value))
+                case IntValue:
+                    return FloatValue(float(result.value))
+                case FloatValue:
+                    return result
+                case _:
+                    return EvalError("float() unsupported for this value", span)
+        return none
+
+    def eval_expr(self, env: Env, expr: Expr) -> Value | EvalError:
+        match expr as result:
+            case LiteralExpr:
+                return self.eval_literal(result.value, result.span)
+            case Ident:
+                match env_get(env, result.name) as found:
+                    case Value:
+                        return found
+                    case none:
+                        pass
+                match env_get(self.globals, result.name) as global_found:
+                    case Value:
+                        return global_found
+                    case none:
+                        return EvalError("undefined variable '" + result.name + "'", result.span)
+            case Propagate:
+                inner = self.eval_expr(env, result.expr)?
+                if value_looks_like_error(inner):
+                    return PropagatedValue(inner)
+                return inner
+            case Binary:
+                left = reject_propagated(self.eval_expr(env, result.left)?, result.span, "a binary operator")?
+                if result.op == "AND":
+                    if not value_is_truthy(left):
+                        return left
+                    return self.eval_expr(env, result.right)?
+                if result.op == "OR":
+                    if value_is_truthy(left):
+                        return left
+                    return self.eval_expr(env, result.right)?
+                right = reject_propagated(self.eval_expr(env, result.right)?, result.span, "a binary operator")?
+                return self.eval_binary(result.op, left, right, result.span)?
+            case Unary:
+                inner = reject_propagated(self.eval_expr(env, result.expr)?, result.span, "a unary operator")?
+                return self.eval_unary(result.op, inner, result.span)?
+            case Call:
+                match result.func as callee:
+                    case Ident:
+                        func_name = callee.name
+                        values: list[Value] = []
+                        for a in result.args:
+                            arg_val = self.eval_expr(env, a.value)?
+                            match arg_val as pv:
+                                case PropagatedValue:
+                                    return pv
+                                case _:
+                                    values.append(arg_val)
+                        match self.call_builtin(func_name, values, result.span)? as builtin_result:
+                            case Value:
+                                return builtin_result
+                            case none:
+                                pass
+                        match self.functions.get(func_name, none) as fn:
+                            case FunctionDef:
+                                return self.call_function(fn, values, result.span)?
+                            case none:
+                                return EvalError("undefined function '" + func_name + "'", result.span)
+                    case Attribute:
+                        receiver = self.eval_expr(env, callee.value)?
+                        match receiver as recv_pv:
+                            case PropagatedValue:
+                                return recv_pv
+                            case _:
+                                pass
+                        method_values: list[Value] = []
+                        for a in result.args:
+                            arg_val = self.eval_expr(env, a.value)?
+                            match arg_val as pv:
+                                case PropagatedValue:
+                                    return pv
+                                case _:
+                                    method_values.append(arg_val)
+                        return self.call_method(receiver, callee.attr, method_values, result.span)?
+                    case _:
+                        return EvalError("only calling a plain name or a method is supported", result.span)
+            case Construct:
+                match self.classes.get(result.class_name, none) as info:
+                    case ClassInfo:
+                        if len(result.args) != len(info.field_names):
+                            return EvalError("construct for '" + result.class_name + "' expects " + str(len(info.field_names)) + " arguments, got " + str(len(result.args)), result.span)
+                        fields: dict[str, Value] = {:}
+                        i = 0
+                        while i < len(result.args):
+                            field_val = self.eval_expr(env, result.args[i].value)?
+                            match field_val as pv:
+                                case PropagatedValue:
+                                    return pv
+                                case _:
+                                    pass
+                            fields[info.field_names[i]] = field_val
+                            i = i + 1
+                        return ObjectValue(result.class_name, fields)
+                    case none:
+                        return EvalError("unknown class '" + result.class_name + "'", result.span)
+            case Attribute:
+                receiver = reject_propagated(self.eval_expr(env, result.value)?, result.span, "an attribute receiver")?
+                match receiver as r:
+                    case ObjectValue:
+                        match r.fields.get(result.attr, none) as field_val:
+                            case Value:
+                                return field_val
+                            case none:
+                                return EvalError("'" + r.class_name + "' has no field '" + result.attr + "'", result.span)
+                    case _:
+                        return EvalError("attribute access unsupported on this value", result.span)
+            case Index:
+                receiver = reject_propagated(self.eval_expr(env, result.value)?, result.span, "an index receiver")?
+                idx = reject_propagated(self.eval_expr(env, result.index)?, result.span, "an index")?
+                match receiver as r:
+                    case ListValue:
+                        match idx as iv:
+                            case IntValue:
+                                if iv.value < 0 or iv.value >= len(r.items):
+                                    return EvalError("list index out of range", result.span)
+                                return r.items[iv.value]
+                            case _:
+                                return EvalError("list index must be an int", result.span)
+                    case StrValue:
+                        match idx as iv:
+                            case IntValue:
+                                if iv.value < 0 or iv.value >= len(r.value):
+                                    return EvalError("string index out of range", result.span)
+                                return StrValue(r.value[iv.value])
+                            case _:
+                                return EvalError("string index must be an int", result.span)
+                    case DictValue:
+                        match idx as iv:
+                            case StrValue:
+                                match r.entries.get(iv.value, none) as dict_val:
+                                    case Value:
+                                        return dict_val
+                                    case none:
+                                        return EvalError("key not found: '" + iv.value + "'", result.span)
+                            case _:
+                                return EvalError("dict key must be a str", result.span)
+                    case _:
+                        return EvalError("indexing unsupported on this value", result.span)
+            case DictExpr:
+                entries: dict[str, Value] = {:}
+                for entry in result.entries:
+                    key_val = self.eval_expr(env, entry.key)?
+                    match key_val as key_pv:
+                        case PropagatedValue:
+                            return key_pv
+                        case _:
+                            pass
+                    dict_entry_val = self.eval_expr(env, entry.value)?
+                    match dict_entry_val as value_pv:
+                        case PropagatedValue:
+                            return value_pv
+                        case _:
+                            pass
+                    match key_val as kv:
+                        case StrValue:
+                            entries[kv.value] = dict_entry_val
+                        case _:
+                            return EvalError("dict keys must be strings", result.span)
+                return DictValue(entries)
+            case ListExpr:
+                items: list[Value] = []
+                for el in result.elements:
+                    el_val = self.eval_expr(env, el)?
+                    match el_val as pv:
+                        case PropagatedValue:
+                            return pv
+                        case _:
+                            items.append(el_val)
+                return ListValue(items)
+            case _:
+                return EvalError("unsupported expression kind", result.span)
+
+    def call_function(self, fn: FunctionDef, args: list[Value], span: Span) -> Value | EvalError:
+        if len(args) != len(fn.params):
+            return EvalError("function '" + fn.name + "' expects " + str(len(fn.params)) + " arguments, got " + str(len(args)), span)
+        call_env = new_env()
+        i = 0
+        while i < len(fn.params):
+            env_set(call_env, fn.params[i].name, args[i])
+            i = i + 1
+        signal = self.exec_block(call_env, fn.body)?
+        match signal as result:
+            case ReturnSignal:
+                return result.value
+            case _:
+                return NoneValue()
+
+    def call_method(self, receiver: Value, method_name: str, args: list[Value], span: Span) -> Value | EvalError:
+        match receiver as r:
+            case ObjectValue:
+                match self.classes.get(r.class_name, none) as info:
+                    case ClassInfo:
+                        match info.methods.get(method_name, none) as fn:
+                            case FunctionDef:
+                                all_args: list[Value] = [receiver]
+                                for a in args:
+                                    all_args.append(a)
+                                return self.call_function(fn, all_args, span)?
+                            case none:
+                                return EvalError("'" + r.class_name + "' has no method '" + method_name + "'", span)
+                    case none:
+                        return EvalError("unknown class '" + r.class_name + "'", span)
+            case ListValue:
+                if method_name == "append":
+                    if len(args) != 1:
+                        return EvalError("append() takes exactly one argument", span)
+                    r.items.append(args[0])
+                    return NoneValue()
+                if method_name == "pop":
+                    if len(r.items) == 0:
+                        return EvalError("pop from empty list", span)
+                    return r.items.pop()
+                return EvalError("list has no method '" + method_name + "'", span)
+            case DictValue:
+                if method_name == "get":
+                    if len(args) != 2:
+                        return EvalError("get() takes exactly two arguments", span)
+                    match args[0] as k:
+                        case StrValue:
+                            return r.entries.get(k.value, args[1])
+                        case _:
+                            return EvalError("dict key must be a str", span)
+                return EvalError("dict has no method '" + method_name + "'", span)
+            case _:
+                return EvalError("method calls unsupported on this value", span)
+
+    def bind_pattern(self, env: Env, pattern: Pattern, value: Value, span: Span) -> none | EvalError:
+        match pattern as result:
+            case IdentPattern:
+                env_set(env, result.name, value)
+                return none
+            case _:
+                return EvalError("unsupported assignment/binding pattern", span)
+
+    def exec_stmt(self, env: Env, stmt: Stmt) -> Signal | EvalError:
+        match stmt as result:
+            case FunctionStmt:
+                self.functions[result.function.name] = result.function
+                return NormalSignal()
+            case ClassDef:
+                own_field_names: list[str] = []
+                methods: dict[str, FunctionDef] = {:}
+                for member in result.body:
+                    match member as m:
+                        case FieldMember:
+                            own_field_names.append(m.field.name)
+                        case MethodMember:
+                            methods[m.method.name] = m.method
+                        case _:
+                            pass
+                # A parent's fields come first, matching Construct's
+                # positional argument order (`Binary(span, op, left,
+                # right)`: `span` is Expr's own field, declared before
+                # Binary's). Only the single class parent counts -- a
+                # base that isn't itself a registered class is a trait
+                # (structural, no fields of its own) and is skipped.
+                field_names: list[str] = []
+                for base in result.bases:
+                    match base as b:
+                        case NamedType:
+                            match self.classes.get(b.name, none) as parent_info:
+                                case ClassInfo:
+                                    for inherited in parent_info.field_names:
+                                        field_names.append(inherited)
+                                case none:
+                                    pass
+                        case _:
+                            pass
+                for own in own_field_names:
+                    field_names.append(own)
+                self.classes[result.name] = ClassInfo(field_names, methods)
+                return NormalSignal()
+            case VarDef:
+                match result.value as value_expr:
+                    case none:
+                        self.bind_pattern(env, result.pattern, NoneValue(), result.span)?
+                    case Expr:
+                        v = self.eval_expr(env, value_expr)?
+                        match v as pv:
+                            case PropagatedValue:
+                                return ReturnSignal(pv.inner)
+                            case _:
+                                pass
+                        self.bind_pattern(env, result.pattern, v, result.span)?
+                return NormalSignal()
+            case Assignment:
+                v = self.eval_expr(env, result.value)?
+                match v as pv:
+                    case PropagatedValue:
+                        return ReturnSignal(pv.inner)
+                    case _:
+                        pass
+                match result.target as target:
+                    case Ident:
+                        env_set(env, target.name, v)
+                        return NormalSignal()
+                    case Attribute:
+                        receiver = reject_propagated(self.eval_expr(env, target.value)?, result.span, "an assignment target")?
+                        match receiver as r:
+                            case ObjectValue:
+                                r.fields[target.attr] = v
+                                return NormalSignal()
+                            case _:
+                                return EvalError("attribute assignment unsupported on this value", result.span)
+                    case Index:
+                        receiver = reject_propagated(self.eval_expr(env, target.value)?, result.span, "an assignment target")?
+                        idx = reject_propagated(self.eval_expr(env, target.index)?, result.span, "an assignment target")?
+                        match receiver as r:
+                            case ListValue:
+                                match idx as iv:
+                                    case IntValue:
+                                        if iv.value < 0 or iv.value >= len(r.items):
+                                            return EvalError("list index out of range", result.span)
+                                        r.items[iv.value] = v
+                                        return NormalSignal()
+                                    case _:
+                                        return EvalError("list index must be an int", result.span)
+                            case DictValue:
+                                match idx as iv:
+                                    case StrValue:
+                                        r.entries[iv.value] = v
+                                        return NormalSignal()
+                                    case _:
+                                        return EvalError("dict key must be a str", result.span)
+                            case _:
+                                return EvalError("index assignment unsupported on this value", result.span)
+                    case _:
+                        return EvalError("unsupported assignment target", result.span)
+            case If:
+                cond = reject_propagated(self.eval_expr(env, result.condition)?, result.span, "an if condition")?
+                if value_is_truthy(cond):
+                    return self.exec_block(env, result.then_branch)?
+                for branch in result.elif_branches:
+                    elif_cond = reject_propagated(self.eval_expr(env, branch.condition)?, result.span, "an elif condition")?
+                    if value_is_truthy(elif_cond):
+                        return self.exec_block(env, branch.body)?
+                match result.else_branch as else_body:
+                    case list[Stmt]:
+                        return self.exec_block(env, else_body)?
+                    case none:
+                        return NormalSignal()
+            case While:
+                while true:
+                    cond = reject_propagated(self.eval_expr(env, result.condition)?, result.span, "a while condition")?
+                    if not value_is_truthy(cond):
+                        break
+                    signal = self.exec_block(env, result.body)?
+                    match signal as sig:
+                        case BreakSignal:
+                            break
+                        case ReturnSignal:
+                            return sig
+                        case _:
+                            pass
+                return NormalSignal()
+            case For:
+                iterable = reject_propagated(self.eval_expr(env, result.iterable)?, result.span, "a for-loop iterable")?
+                match iterable as items:
+                    case ListValue:
+                        for item in items.items:
+                            self.bind_pattern(env, result.target, item, result.span)?
+                            signal = self.exec_block(env, result.body)?
+                            match signal as sig:
+                                case BreakSignal:
+                                    return NormalSignal()
+                                case ReturnSignal:
+                                    return sig
+                                case _:
+                                    pass
+                        return NormalSignal()
+                    case _:
+                        return EvalError("for-loop expects a list", result.span)
+            case Return:
+                match result.value as value_expr:
+                    case Expr:
+                        v = self.eval_expr(env, value_expr)?
+                        match v as pv:
+                            case PropagatedValue:
+                                return ReturnSignal(pv.inner)
+                            case _:
+                                return ReturnSignal(v)
+                    case none:
+                        return ReturnSignal(NoneValue())
+            case Break:
+                return BreakSignal()
+            case Continue:
+                return ContinueSignal()
+            case Pass:
+                return NormalSignal()
+            case ExprStmt:
+                expr_val = self.eval_expr(env, result.expr)?
+                match expr_val as pv:
+                    case PropagatedValue:
+                        return ReturnSignal(pv.inner)
+                    case _:
+                        pass
+                return NormalSignal()
+            case MetadataStmt:
+                return NormalSignal()
+            case Import:
+                # A no-op here: this evaluator has no module system of
+                # its own (see the deferred-features list at the top of
+                # this file). Whatever `import`/`from ... import` names
+                # are actually used has to already be registered in this
+                # same Interpreter -- by a caller running that other
+                # module's statements through it first, the way
+                # self_hosting_demo.lucid and this file's own probes do.
+                return NormalSignal()
+            case FromImport:
+                return NormalSignal()
+            case MatchStmt:
+                subject_val = reject_propagated(self.eval_expr(env, result.subject)?, result.span, "a match subject")?
+                for arm in result.arms:
+                    if pattern_matches(arm.pattern, subject_val):
+                        match result.subject_alias as alias_name:
+                            case str:
+                                env_set(env, alias_name, subject_val)
+                            case none:
+                                pass
+                        return self.exec_block(env, arm.body)?
+                return EvalError("no match arm matched", result.span)
+            case _:
+                return EvalError("unsupported statement kind", result.span)
+
+    def exec_block(self, env: Env, stmts: list[Stmt]) -> Signal | EvalError:
+        for stmt in stmts:
+            signal = self.exec_stmt(env, stmt)?
+            match signal as result:
+                case NormalSignal:
+                    pass
+                case _:
+                    return result
+        return NormalSignal()
+
+def new_interpreter() -> Interpreter:
+    return Interpreter({:}, {:}, new_env())
+
+def run_statements(interp: Interpreter, stmts: list[Stmt]) -> none | EvalError:
+    signal = interp.exec_block(interp.globals, stmts)?
+    return none
+
+def call_registered(interp: Interpreter, name: str, args: list[Value]) -> Value | EvalError:
+    match interp.functions.get(name, none) as fn:
+        case FunctionDef:
+            return interp.call_function(fn, args, dummy_span())?
+        case none:
+            return EvalError("undefined function '" + name + "'", dummy_span())

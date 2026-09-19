@@ -1514,6 +1514,14 @@ pub struct TypeChecker {
     /// Advice that does not stop checking, such as a type parameter left
     /// without a variance marker.
     pub warnings: Vec<TypeWarning>,
+    /// Other modules' fully checked environments, keyed by the module path
+    /// as a `from <module> import ...` statement spells it. The checker
+    /// does no file I/O of its own (see `merge_import_from`); a caller
+    /// that resolves imports to files -- `lucid-db`'s project pipeline,
+    /// today -- populates this before `check_module` runs, and
+    /// `Stmt::FromImport` merges from it instead of falling back to `Any`
+    /// when an entry is present.
+    pub imported_envs: HashMap<String, TypeEnvironment>,
 }
 
 /// The narrowing a condition establishes on its true and false branches:
@@ -2780,11 +2788,186 @@ impl TypeChecker {
             env,
             narrowing_constraints: HashMap::new(),
             warnings: Vec::new(),
+            imported_envs: HashMap::new(),
+        }
+    }
+
+    /// Merge another (already fully checked) module's declarations into
+    /// this checker's environment for a `from <module> import <names>`
+    /// statement, so an imported name resolves to its real type instead
+    /// of the `Any` `Stmt::FromImport` falls back to on its own.
+    ///
+    /// Classes, traits, and type aliases merge wholesale, unconditionally
+    /// of which names were actually listed: a class can be reached
+    /// transitively (a field typed as a class the importing file never
+    /// names directly, the way any AST node class references its own
+    /// family), so anything less than "the whole type graph is visible
+    /// once you import anything from this module" leaves transitive
+    /// lookups broken. Functions and plain variables merge only for the
+    /// names actually requested, matching "every import names its
+    /// targets explicitly" (see docs/import.md) -- callable helpers,
+    /// unlike types, are only ever reached by the name you imported them
+    /// under, so nothing beyond that name should leak in.
+    pub fn merge_import_from(
+        &mut self,
+        source: &TypeEnvironment,
+        names: &[(String, Option<String>)],
+    ) {
+        macro_rules! merge_all {
+            ($($field:ident),+ $(,)?) => {
+                $(self.env.$field.extend(source.$field.clone());)+
+            };
+        }
+        merge_all!(
+            classes,
+            traits,
+            type_aliases,
+            type_alias_params,
+            type_alias_bounds,
+            final_fields,
+            final_methods,
+            final_classes,
+            external_classes,
+            class_members,
+            class_implemented_members,
+            class_abstract_members,
+            class_methods,
+            class_method_params,
+            class_method_receivers,
+            trait_method_receivers,
+            class_getters,
+            trait_methods,
+            trait_method_params,
+            trait_getters,
+            trait_fields,
+            trait_bases,
+            class_trait_args,
+            class_vars,
+            class_field_order,
+            class_constructor_arity,
+            class_constructor_required,
+            class_parents,
+            class_variance,
+            class_type_params,
+            trait_type_params,
+            trait_variance,
+            class_bounds,
+            trait_bounds,
+            class_type_param_defaults,
+            trait_type_param_defaults,
+            class_type_param_alternatives,
+            trait_type_param_alternatives,
+            obligations,
+            final_obligations,
+            sealed_subclasses,
+        );
+
+        for (name, alias) in names {
+            let bound_name = alias.as_ref().unwrap_or(name).clone();
+
+            if let Some(ty) = source.functions.get(name) {
+                self.env.functions.insert(bound_name.clone(), ty.clone());
+                if let Some(params) = source.function_type_params.get(name) {
+                    self.env
+                        .function_type_params
+                        .insert(bound_name.clone(), params.clone());
+                }
+                if let Some(arity) = source.function_arity.get(name) {
+                    self.env.function_arity.insert(bound_name.clone(), *arity);
+                }
+                if let Some(params) = source.function_param_names.get(name) {
+                    self.env
+                        .function_param_names
+                        .insert(bound_name.clone(), params.clone());
+                }
+                if let Some(set) = source.function_positional_only.get(name) {
+                    self.env
+                        .function_positional_only
+                        .insert(bound_name.clone(), set.clone());
+                }
+                if let Some(set) = source.function_keyword_only.get(name) {
+                    self.env
+                        .function_keyword_only
+                        .insert(bound_name.clone(), set.clone());
+                }
+                if let Some(params) = source.function_required_params.get(name) {
+                    self.env
+                        .function_required_params
+                        .insert(bound_name.clone(), params.clone());
+                }
+                if let Some(v) = source.function_variadic_positional.get(name) {
+                    self.env
+                        .function_variadic_positional
+                        .insert(bound_name.clone(), v.clone());
+                }
+                if let Some(v) = source.function_variadic_keyword.get(name) {
+                    self.env
+                        .function_variadic_keyword
+                        .insert(bound_name.clone(), v.clone());
+                }
+                if let Some(overloads) = source.function_overloads.get(name) {
+                    self.env
+                        .function_overloads
+                        .insert(bound_name.clone(), overloads.clone());
+                }
+                if source.dispatch_functions.contains(name) {
+                    self.env.dispatch_functions.insert(bound_name.clone());
+                }
+                if source.overloaded_functions.contains(name) {
+                    self.env.overloaded_functions.insert(bound_name.clone());
+                }
+                if source.contextmanager_functions.contains(name) {
+                    self.env.contextmanager_functions.insert(bound_name.clone());
+                }
+                self.env
+                    .variables
+                    .insert(bound_name.clone(), (ty.clone(), MutabilityView::ReadOnly));
+                continue;
+            }
+
+            if let Some((ty, view)) = source.variables.get(name) {
+                self.env
+                    .variables
+                    .insert(bound_name.clone(), (ty.clone(), view.clone()));
+                continue;
+            }
+
+            // A class or trait imported by name is already visible under
+            // its own declared name from the wholesale merge above; alias
+            // it under the local binding too; so `from .ast import Expr as
+            // E` and a later `E(...)` construct call both resolve.
+            if let Some(ty) = source.classes.get(name).or_else(|| source.traits.get(name)) {
+                if &bound_name != name {
+                    self.env
+                        .variables
+                        .insert(bound_name.clone(), (ty.clone(), MutabilityView::ReadOnly));
+                }
+            }
         }
     }
 
     pub fn check_module(&mut self, module: &Module) -> Result<(), TypeError> {
         self.validate_metadata_blocks(&module.statements)?;
+        // Merge imported declarations before anything else, including the
+        // "Pass 1" declaration pass below: a function's own signature
+        // (`def make() -> list[Stmt]`) is resolved there, in file order,
+        // and resolving `Stmt` before its import has merged in falls back
+        // to treating it as an unknown forward reference -- fields empty,
+        // not sealed -- which then permanently disagrees with every later,
+        // correctly-resolved use of the same imported name (a variable
+        // annotated `list[Stmt]` lower in the file, resolved after the
+        // merge, sees the real one). This mirrors why class modifiers and
+        // declarations are collected up front below: none of this can
+        // depend on source order, and an import is a declaration like any
+        // other.
+        for stmt in &module.statements {
+            let Stmt::FromImport { module, names, .. } = stmt else {
+                continue;
+            };
+            if let Some(source_env) = self.imported_envs.get(module).cloned() {
+                self.merge_import_from(&source_env, names);
+            }
+        }
         // Record modifiers before resolving bases so inheritance constraints do
         // not depend on source declaration order.
         for stmt in &module.statements {
@@ -2801,6 +2984,20 @@ impl TypeChecker {
         // class inheritance, and lets us reject cycles before member lookup or
         // exhaustiveness analysis can recurse through them.
         self.resolve_class_parents_and_check_cycles(module)?;
+
+        // A field's declared type is resolved once, in file order, inside
+        // Pass 1 above -- so a field typed as another class declared later
+        // in the same file (ordinary for a mutually recursive AST: a
+        // sealed Expr's own field holding `list[Stmt]` alongside Stmt
+        // holding an `Expr`) resolves before that class exists in
+        // `env.classes`. `resolve_type_expr` doesn't error on an unknown
+        // name; it returns a placeholder with no fields and
+        // `is_sealed: false` instead, and Pass 1 bakes that placeholder
+        // into the field permanently -- so it disagrees with the same
+        // class resolved correctly everywhere else, rejecting perfectly
+        // valid values. Re-resolve every field now that every class in the
+        // module is known, the same way class parents just did above.
+        self.refresh_forward_referenced_field_types(module)?;
 
         // Pass 2: Verify single-inheritance and trait constraints
         for stmt in &module.statements {
@@ -2911,6 +3108,43 @@ impl TypeChecker {
                     span,
                 });
             }
+        }
+        Ok(())
+    }
+
+    fn refresh_forward_referenced_field_types(&mut self, module: &Module) -> Result<(), TypeError> {
+        for stmt in &module.statements {
+            let Stmt::ClassDef {
+                name,
+                type_params,
+                body,
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            // Field types resolve against the class's own type parameters
+            // (a field typed `T` must stay `TypeVar("T")`, not resolve as
+            // a class named "T") -- collect_declaration binds these into
+            // `type_var_bounds` for the same reason while it resolves
+            // fields the first time, then restores the prior bounds
+            // afterward; mirror that scoping here.
+            let saved_type_var_bounds = self.env.type_var_bounds.clone();
+            for param in type_params {
+                self.env
+                    .type_var_bounds
+                    .insert(param.name.clone(), Type::TypeVar("Any".into()));
+            }
+            for member in body {
+                let ClassMember::Field(f) = member else {
+                    continue;
+                };
+                let resolved = self.resolve_type_expr(&f.type_annotation)?;
+                if let Some(Type::Class { fields, .. }) = self.env.classes.get_mut(name) {
+                    fields.insert(f.name.clone(), resolved);
+                }
+            }
+            self.env.type_var_bounds = saved_type_var_bounds;
         }
         Ok(())
     }
@@ -7966,10 +8200,23 @@ impl TypeChecker {
                             span: *span,
                         });
                     }
-                    self.env.variables.insert(
-                        bound_name,
-                        (Type::TypeVar("Any".to_string()), MutabilityView::ReadOnly),
-                    );
+                }
+                if let Some(source_env) = self.imported_envs.get(module).cloned() {
+                    self.merge_import_from(&source_env, names);
+                } else {
+                    // No pre-resolved environment for this module (a
+                    // builtin like math/sys, or a caller that never wired
+                    // one up, e.g. a bare `check_module` call outside the
+                    // project pipeline). Fall back to the untyped stub so
+                    // these calls still type-check dynamically instead of
+                    // failing outright.
+                    for (name, alias) in names {
+                        let bound_name = alias.as_ref().unwrap_or(name).clone();
+                        self.env.variables.insert(
+                            bound_name,
+                            (Type::TypeVar("Any".to_string()), MutabilityView::ReadOnly),
+                        );
+                    }
                 }
                 Ok(())
             }
@@ -13285,6 +13532,7 @@ impl TypeChecker {
                     }
                     match &val_t {
                         Type::View { ref inner, .. } => match inner.as_ref() {
+                            Type::Str | Type::LiteralStr(_) => Ok(val_t.clone()),
                             Type::Class { name, .. }
                                 if matches!(
                                     name.as_str(),
@@ -13300,6 +13548,14 @@ impl TypeChecker {
                             }),
                         },
                         Type::TypeVar(name) if name == "Any" => Ok(Type::TypeVar("Any".into())),
+                        // A literal string, unlike every other builtin
+                        // container, gets its own primitive Type variant
+                        // (Type::Str / Type::LiteralStr) rather than being
+                        // modeled as Type::Class{name: "str", ..} the way
+                        // list/range/Bytes/etc. are, so it needs its own arm
+                        // here instead of falling through to "not
+                        // sliceable".
+                        Type::Str | Type::LiteralStr(_) => Ok(Type::Str),
                         Type::Class { name, .. }
                             if matches!(
                                 name.as_str(),
@@ -15071,6 +15327,131 @@ fn yield_guaranteed(statements: &[Stmt]) -> bool {
 mod tests {
     use super::*;
     use lucid_syntax::parse;
+
+    #[test]
+    fn merge_import_from_resolves_imported_class_and_function_types() {
+        let source_module = parse(
+            "sealed class Shape:\n    pass\nclass Circle(Shape):\n    radius: float\ndef add_one(n: int) -> int:\n    return n + 1\nkeywords = {\"if\": 1}\n",
+        )
+        .expect("source module should parse");
+        let mut source_checker = TypeChecker::new();
+        source_checker
+            .check_module(&source_module)
+            .expect("source module should check");
+
+        // Constructing the imported class works once its declaration is
+        // merged in -- this failed with "unknown enclosing class" before
+        // merge_import_from existed, since Stmt::FromImport bound every
+        // name to Any and never touched env.classes.
+        let importer_module = parse("c = Circle(1.0)\nn = add_one(41)\n").unwrap();
+        let mut importer = TypeChecker::new();
+        importer.merge_import_from(
+            &source_checker.env,
+            &[("Circle".to_string(), None), ("add_one".to_string(), None)],
+        );
+        importer
+            .check_module(&importer_module)
+            .expect("constructing an imported class and calling an imported function should check");
+
+        // A wrong-typed call to the imported function is still rejected
+        // -- proving the merged function keeps its real signature instead
+        // of falling back to Any.
+        let bad_call_module = parse("add_one(\"nope\")\n").unwrap();
+        let mut bad_call_checker = TypeChecker::new();
+        bad_call_checker.merge_import_from(&source_checker.env, &[("add_one".to_string(), None)]);
+        assert!(
+            bad_call_checker.check_module(&bad_call_module).is_err(),
+            "a wrong-typed argument to an imported function should be rejected, not accepted as Any"
+        );
+
+        // A name not in the explicit import list stays invisible, even
+        // though its module was merged from -- functions/variables merge
+        // only for names actually requested (classes/traits/aliases merge
+        // wholesale, for transitive type references).
+        let unimported_module = parse("k = keywords\n").unwrap();
+        let mut unimported_checker = TypeChecker::new();
+        unimported_checker.merge_import_from(&source_checker.env, &[("Circle".to_string(), None)]);
+        assert!(
+            unimported_checker.check_module(&unimported_module).is_err(),
+            "a name not in the import list should not be visible"
+        );
+    }
+
+    #[test]
+    fn imported_envs_merge_before_the_declaration_pass_resolves_signatures() {
+        // check_module resolves every top-level function's signature (Pass
+        // 1, collect_declaration) before it sequentially reaches and
+        // processes a Stmt::FromImport statement later in the file (Pass
+        // 3). Without an up-front merge, a function whose own signature
+        // names an imported type -- `def make() -> list[Stmt]` -- has that
+        // type resolved before the import merges in, permanently caching
+        // an "unknown forward reference" placeholder (empty fields, not
+        // sealed) that then disagrees with the same name resolved
+        // correctly everywhere after the import statement.
+        let source_module =
+            parse("sealed class Stmt:\n    span: int\nclass Pass(Stmt):\n    pass\n")
+                .expect("source module should parse");
+        let mut source_checker = TypeChecker::new();
+        source_checker
+            .check_module(&source_module)
+            .expect("source module should check");
+
+        let importer_module = parse(
+            "from .stmt import Stmt, Pass\n\ndef make() -> list[Stmt]:\n    return [Pass(1)]\n\nclass Runner:\n    x: int\n\n    def run(self) -> int:\n        body: list[Stmt] = []\n        body = make()\n        return len(body)\n",
+        )
+        .expect("importer module should parse");
+        let mut importer = TypeChecker::new();
+        importer
+            .imported_envs
+            .insert(".stmt".to_string(), source_checker.env.clone());
+        importer.check_module(&importer_module).expect(
+            "a function's own return type naming an imported class, checked against a later \
+             variable of the same imported type, should agree",
+        );
+    }
+
+    #[test]
+    fn forward_referenced_same_file_field_types_refresh_after_every_class_is_known() {
+        // collect_declaration (Pass 1) resolves each field's declared type
+        // once, in file order -- so a field typed as a class declared
+        // later in the same file (ordinary for a mutually recursive AST:
+        // FunctionDef.body: list[Stmt], with Stmt declared afterward)
+        // resolves before that class exists in env.classes, and
+        // resolve_type_expr silently caches an "unknown forward
+        // reference" placeholder (no fields, not sealed) rather than
+        // erroring. refresh_forward_referenced_field_types re-resolves
+        // every field once every class in the module is registered, the
+        // same way class parents already get a dedicated second pass.
+        let module = parse(
+            "class Holder:\n    items: list[Stmt]\n\nsealed class Stmt:\n    pass\n\nclass Pass(Stmt):\n    pass\n\np: Stmt = Pass()\nitems: list[Stmt] = [p]\nh = Holder(items)\n",
+        )
+        .expect("module should parse");
+        let mut checker = TypeChecker::new();
+        checker.check_module(&module).expect(
+            "a field typed as a same-file class declared later should accept that class's real \
+             instances, not reject them against a cached empty-fields placeholder",
+        );
+    }
+
+    #[test]
+    fn forward_referenced_field_refresh_keeps_generic_type_parameters_as_type_vars() {
+        // The refresh pass in the previous test must resolve fields in
+        // the same type-parameter scope collect_declaration used the
+        // first time -- otherwise a generic field typed `T` re-resolves
+        // as a class literally named "T" instead of staying TypeVar("T"),
+        // breaking every generic class with at least one field (variance
+        // views, projections, anything using its own type parameter in a
+        // field position).
+        let module = parse(
+            "class Box[T]:\n    value: T\n\n    def get(self) -> T:\n        return self.value\n\nb = Box(3)\nn: int = b.get()\n",
+        )
+        .expect("module should parse");
+        let mut checker = TypeChecker::new();
+        checker.check_module(&module).expect(
+            "a generic class's own type parameter used as a field type should remain a type \
+             variable after the forward-reference refresh pass, not resolve as an unknown class",
+        );
+    }
 
     #[test]
     fn pattern_bound_names_skips_type_like_identifiers() {
@@ -18741,6 +19122,14 @@ def reject(value: not int) -> none:
             checker.resolve_type_expr(&expr).unwrap(),
             Type::Shape(vec![Some(2), Some(3)])
         );
+    }
+
+    #[test]
+    fn test_str_literal_is_sliceable() {
+        let module =
+            parse("s = \"hello world\"\nfirst: str = s[0:5]\nrest: str = s[6:]\n").unwrap();
+        let mut checker = TypeChecker::new();
+        checker.check_module(&module).unwrap();
     }
 
     #[test]

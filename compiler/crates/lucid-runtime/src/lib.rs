@@ -14,6 +14,32 @@ use std::rc::Rc;
 type BuiltinFn = Rc<dyn Fn(&[Value], &mut Interpreter) -> Result<Value, RuntimeError>>;
 type Teardown = (Vec<Stmt>, Option<Vec<Stmt>>, Rc<RefCell<Environment>>);
 
+/// Evaluates an expression that will be consumed as an ordinary value (a
+/// call/construct argument, a collection element, an operand) rather than
+/// returned directly. A `?` inside the expression produces a
+/// `Value::Return` sentinel meant to unwind out of the *enclosing
+/// function*, not become the value of this subexpression -- so every site
+/// that evaluates a subexpression and then goes on to do something else
+/// with the result (push it into a list, pass it to a callee, combine it
+/// with another operand) must check for that sentinel and re-propagate it,
+/// the same way statement execution already does for `Stmt::VarDef`'s and
+/// `Stmt::Assignment`'s own value expressions. Without this, a failing `?`
+/// nested inside, say, a call argument (`items.append(parse_one()?)`)
+/// silently hands the raw error object to `append` as if it were the
+/// success value instead of unwinding -- the caller's loop then keeps
+/// going with no indication anything failed, which for a loop whose exit
+/// condition depends on progress that same failed call was supposed to
+/// make is an infinite loop, not just a wrong answer.
+macro_rules! eval_operand {
+    ($self:expr, $expr:expr) => {{
+        let value = $self.eval_expr($expr)?;
+        if let Value::Return(_) = value {
+            return Ok(value);
+        }
+        value
+    }};
+}
+
 fn declaration_only_module(path: &std::path::Path) -> bool {
     let Ok(source) = std::fs::read_to_string(path) else {
         return false;
@@ -646,7 +672,23 @@ impl fmt::Debug for Value {
                 is_frozen,
             } => {
                 let prefix = if *is_frozen.borrow() { "!" } else { "" };
-                write!(f, "{prefix}{class_name}({:?})", *fields.borrow())
+                // `fields` is a HashMap, whose iteration order is
+                // randomized per process (Rust's default hasher uses a
+                // random seed for DoS resistance) -- printing the same
+                // object twice in the same run, let alone across runs,
+                // previously produced a different string each time.
+                // Sorted by field name for a stable, reproducible repr.
+                let borrowed = fields.borrow();
+                let mut sorted: Vec<(&String, &Value)> = borrowed.iter().collect();
+                sorted.sort_by_key(|(key, _)| key.as_str());
+                write!(f, "{prefix}{class_name}({{")?;
+                for (i, (key, value)) in sorted.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{key:?}: {value:?}")?;
+                }
+                write!(f, "}})")
             }
             Value::Function { name, .. } => write!(f, "<def {name}>"),
             Value::Future(_) => write!(f, "<future>"),
@@ -697,6 +739,18 @@ pub struct Environment {
     pub binding_order: Vec<String>,
     pub parent: Option<Rc<RefCell<Environment>>>,
     pub final_bindings: HashSet<String>,
+    /// True for the environment created to hold a function/method/getter/
+    /// setter/factory call's own parameters and locals (every `call_env` at
+    /// a function-invocation site), never for a block-scoping environment
+    /// (a loop iteration, a comprehension, a `with` body). `mutate` uses
+    /// this to know where the *current function invocation's* scope ends:
+    /// per docs/scope.md ("assignment is always local ... no global, no
+    /// nonlocal"), a bare `x = value` for a name not yet bound anywhere in
+    /// the current call must create a new local in this call, never reach
+    /// across into the closure the call was made from (an enclosing
+    /// function's locals, or the module's globals) and rebind a
+    /// same-named variable there.
+    pub is_call_boundary: bool,
 }
 
 impl Environment {
@@ -711,6 +765,7 @@ impl Environment {
             binding_order: Vec::new(),
             parent: Some(parent),
             final_bindings: HashSet::new(),
+            is_call_boundary: false,
         }
     }
 
@@ -772,6 +827,15 @@ impl Environment {
         if self.bindings.contains_key(name) {
             self.bindings.insert(name.to_string(), value);
             true
+        } else if self.is_call_boundary {
+            // This environment is a function call's own scope, and `name`
+            // isn't bound anywhere within it (checked here and in every
+            // block-scoping child that delegated up to this point) -- stop
+            // here rather than reach into the closure this call was made
+            // from. The caller (Stmt::Assignment's mutate-then-set
+            // fallback) creates the new local in the call's own innermost
+            // scope instead.
+            false
         } else if let Some(ref p) = self.parent {
             p.borrow_mut().mutate(name, value)
         } else {
@@ -6319,6 +6383,7 @@ class ZeroDivisionError(Exception):
                                         let call_env = Rc::new(RefCell::new(
                                             Environment::with_parent(closure),
                                         ));
+                                        call_env.borrow_mut().is_call_boundary = true;
                                         for (param, arg_val) in
                                             params.iter().zip(call_args.drain(..))
                                         {
@@ -7385,7 +7450,7 @@ class ZeroDivisionError(Exception):
                 right,
                 span,
             } => {
-                let lval = self.eval_expr(left)?;
+                let lval = eval_operand!(self, left);
                 if matches!(op, BinaryOp::Is | BinaryOp::IsNot) {
                     let type_name = match &**right {
                         Expr::Type(TypeExpr::Named { name, .. }) | Expr::Ident { name, .. } => {
@@ -7420,7 +7485,7 @@ class ZeroDivisionError(Exception):
                                 | "Shape"
                         ) || self.classes.contains_key(&name);
                         if !is_type_operand {
-                            let rval = self.eval_expr(right)?;
+                            let rval = eval_operand!(self, right);
                             return Ok(Value::Bool(if matches!(op, BinaryOp::Is) {
                                 lval == rval
                             } else {
@@ -7539,11 +7604,11 @@ class ZeroDivisionError(Exception):
                         self.eval_expr(right)
                     };
                 }
-                let rval = self.eval_expr(right)?;
+                let rval = eval_operand!(self, right);
                 self.eval_binary_op(op, lval, rval, span)
             }
             Expr::Unary { op, expr, span } => {
-                let val = self.eval_expr(expr)?;
+                let val = eval_operand!(self, expr);
                 match op {
                     UnaryOp::Neg => match val {
                         Value::Int(n) => Ok(Value::Int(match n {
@@ -7669,7 +7734,7 @@ class ZeroDivisionError(Exception):
                                             span: arg.span,
                                         });
                                     }
-                                    updated.insert(name.clone(), self.eval_expr(&arg.value)?);
+                                    updated.insert(name.clone(), eval_operand!(self, &arg.value));
                                 }
                                 return Ok(Value::Object {
                                     class_name: class_name.clone(),
@@ -7725,7 +7790,7 @@ class ZeroDivisionError(Exception):
                             partial_args.push((arg.name.clone(), None));
                         } else {
                             partial_args
-                                .push((arg.name.clone(), Some(self.eval_expr(&arg.value)?)));
+                                .push((arg.name.clone(), Some(eval_operand!(self, &arg.value))));
                         }
                     }
                     return Ok(Value::Partial {
@@ -7737,7 +7802,7 @@ class ZeroDivisionError(Exception):
                 let mut evaluated_args: Vec<(Option<String>, Value)> = Vec::new();
                 for arg in args {
                     if arg.is_gather_spread {
-                        let val = self.eval_expr(&arg.value)?;
+                        let val = eval_operand!(self, &arg.value);
                         match val {
                             Value::Object {
                                 class_name, fields, ..
@@ -7788,7 +7853,7 @@ class ZeroDivisionError(Exception):
                             }
                         }
                     } else if arg.is_spread {
-                        let val = self.eval_expr(&arg.value)?;
+                        let val = eval_operand!(self, &arg.value);
                         if arg.is_dict_spread {
                             match val {
                                 Value::Dict(d) => {
@@ -7822,7 +7887,7 @@ class ZeroDivisionError(Exception):
                             }
                         }
                     } else {
-                        let value = self.eval_expr(&arg.value)?;
+                        let value = eval_operand!(self, &arg.value);
                         if !matches!(value, Value::Skip) {
                             evaluated_args.push((arg.name.clone(), value));
                         }
@@ -7904,6 +7969,7 @@ class ZeroDivisionError(Exception):
                         }
                         let bound_args = self.bind_arguments(&params, &evaluated_args)?;
                         let call_env = Rc::new(RefCell::new(Environment::with_parent(closure)));
+                        call_env.borrow_mut().is_call_boundary = true;
                         for (param, val) in params.iter().zip(bound_args) {
                             call_env.borrow_mut().set(param.name.clone(), val);
                         }
@@ -8039,7 +8105,7 @@ class ZeroDivisionError(Exception):
                         }),
                     });
                 }
-                let obj = self.eval_expr(value)?;
+                let obj = eval_operand!(self, value);
                 match obj {
                     Value::Function { name, .. } => match attr.as_str() {
                         "__name__" => Ok(Value::Str(name)),
@@ -8182,6 +8248,7 @@ class ZeroDivisionError(Exception):
                                         let mut call_args = vec![bound_self];
                                         let call_env =
                                             Rc::new(RefCell::new(Environment::with_parent(c)));
+                                        call_env.borrow_mut().is_call_boundary = true;
                                         for (param, arg_val) in
                                             params.iter().zip(call_args.drain(..))
                                         {
@@ -8213,6 +8280,7 @@ class ZeroDivisionError(Exception):
                                             let call_env = Rc::new(RefCell::new(
                                                 Environment::with_parent(Rc::clone(&c)),
                                             ));
+                                            call_env.borrow_mut().is_call_boundary = true;
                                             call_env.borrow_mut().set(
                                                 "__current_class".into(),
                                                 Value::Str(class_name.clone()),
@@ -9112,7 +9180,7 @@ class ZeroDivisionError(Exception):
                 }
             }
             Expr::Index { value, index, span } => {
-                let obj = self.eval_expr(value)?;
+                let obj = eval_operand!(self, value);
                 if let Expr::Slice {
                     ref start,
                     ref stop,
@@ -9389,7 +9457,7 @@ class ZeroDivisionError(Exception):
                     }
                 }
 
-                let idx = self.eval_expr(index)?;
+                let idx = eval_operand!(self, index);
                 if let Value::Object {
                     class_name, fields, ..
                 } = &obj
@@ -9547,7 +9615,7 @@ class ZeroDivisionError(Exception):
             Expr::List { elements, .. } => {
                 let mut vals = Vec::new();
                 for e in elements {
-                    let val = self.eval_expr(e)?;
+                    let val = eval_operand!(self, e);
                     if !matches!(val, Value::Skip) {
                         vals.push(val);
                     }
@@ -9557,11 +9625,11 @@ class ZeroDivisionError(Exception):
             Expr::Dict { entries, .. } => {
                 let mut map = HashMap::new();
                 for (k, v) in entries {
-                    let k_val = self.eval_expr(k)?;
+                    let k_val = eval_operand!(self, k);
                     if matches!(k_val, Value::Skip) {
                         continue;
                     }
-                    let v_val = self.eval_expr(v)?;
+                    let v_val = eval_operand!(self, v);
                     if matches!(v_val, Value::Skip) {
                         continue;
                     }
@@ -9576,7 +9644,7 @@ class ZeroDivisionError(Exception):
             Expr::Set { elements, .. } => {
                 let mut set_vals = Vec::new();
                 for e in elements {
-                    let val = self.eval_expr(e)?;
+                    let val = eval_operand!(self, e);
                     if !matches!(val, Value::Skip) && !set_vals.contains(&val) {
                         set_vals.push(val);
                     }
@@ -9605,7 +9673,7 @@ class ZeroDivisionError(Exception):
                         };
                         let mut evaluated = Vec::new();
                         for arg in args {
-                            let value = self.eval_expr(&arg.value)?;
+                            let value = eval_operand!(self, &arg.value);
                             evaluated.push((arg.name.clone(), value));
                         }
                         return self.invoke_value(callee, evaluated, *span);
@@ -9613,7 +9681,7 @@ class ZeroDivisionError(Exception):
                     let field_names = self.constructor_field_names(class_name);
                     let mut slots: Vec<Option<Value>> = Vec::new();
                     for arg in args {
-                        let value = self.eval_expr(&arg.value)?;
+                        let value = eval_operand!(self, &arg.value);
                         match &arg.name {
                             Some(name) => {
                                 let Some(index) =
@@ -9651,7 +9719,7 @@ class ZeroDivisionError(Exception):
                 }
                 let mut field_values = HashMap::new();
                 for (idx, arg) in args.iter().enumerate() {
-                    let val = self.eval_expr(&arg.value)?;
+                    let val = eval_operand!(self, &arg.value);
                     let name = arg.name.clone().unwrap_or_else(|| format!("field_{idx}"));
                     field_values.insert(name, val);
                 }
@@ -10134,6 +10202,7 @@ class ZeroDivisionError(Exception):
         call_args.extend_from_slice(args);
         let closure = Rc::clone(&self.env);
         let call_env = Rc::new(RefCell::new(Environment::with_parent(closure)));
+        call_env.borrow_mut().is_call_boundary = true;
         for (param, val) in factory.params.iter().zip(call_args) {
             call_env.borrow_mut().set(param.name.clone(), val);
         }
@@ -10282,6 +10351,7 @@ class ZeroDivisionError(Exception):
         closure: Rc<RefCell<Environment>>,
     ) -> Result<Value, RuntimeError> {
         let call_env = Rc::new(RefCell::new(Environment::with_parent(closure)));
+        call_env.borrow_mut().is_call_boundary = true;
         for (param, val) in func.params.iter().zip(args) {
             call_env.borrow_mut().set(param.name.clone(), val.clone());
         }
@@ -10338,6 +10408,7 @@ class ZeroDivisionError(Exception):
                 }
                 let bound = self.bind_arguments(&params, &args)?;
                 let call_env = Rc::new(RefCell::new(Environment::with_parent(closure)));
+                call_env.borrow_mut().is_call_boundary = true;
                 for (param, val) in params.iter().zip(bound) {
                     call_env.borrow_mut().set(param.name.clone(), val);
                 }
@@ -10597,6 +10668,7 @@ class ZeroDivisionError(Exception):
             }
         }
         let call_env = Rc::new(RefCell::new(Environment::with_parent(closure)));
+        call_env.borrow_mut().is_call_boundary = true;
         for (param, val) in params.iter().zip(args) {
             call_env.borrow_mut().set(param.name.clone(), val.clone());
         }
@@ -11089,6 +11161,27 @@ mod tests {
     }
 
     #[test]
+    fn object_repr_field_order_is_deterministic_not_hashmap_order() {
+        // Value::Object's fields are a HashMap, whose iteration order is
+        // randomized per process (Rust's default hasher). print()ing the
+        // same object used to produce a different string on almost every
+        // run -- caught by running the same source repeatedly and seeing
+        // the field order change. Fixed by sorting fields by name before
+        // formatting; this pins that order down.
+        let module = parse(
+            "class P:\n    name: str\n    age: int\n    active: bool\n\nvalue = P(\"Alice\", 30, true)\n",
+        )
+        .unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        let value = interp.env.borrow().get("value").unwrap();
+        assert_eq!(
+            format!("{value:?}"),
+            "P({\"active\": true, \"age\": 30, \"name\": \"Alice\"})"
+        );
+    }
+
+    #[test]
     fn bare_skip_is_rejected_in_runtime_value_positions() {
         for (source, expected) in [
             ("value = skip\n", "assignment value"),
@@ -11119,6 +11212,136 @@ mod tests {
         assert!(
             matches!(interp.env.borrow().get("mapping"), Some(Value::Dict(items)) if items.borrow().len() == 1)
         );
+    }
+
+    #[test]
+    fn assignment_inside_a_function_never_rebinds_an_enclosing_variable() {
+        // docs/scope.md: "assignment is always local, independent of
+        // anything else in the function" -- no `global`, no `nonlocal`.
+        // A bare `i = 0` inside a called function, for a name that
+        // happens to already exist in the caller's scope (or the
+        // module's globals), must create a new local within that call,
+        // never silently rebind the caller's/module's own variable.
+        //
+        // The bug this guards: Stmt::Assignment falls back from
+        // `Environment::mutate` (which walks the parent chain) to
+        // `Environment::set` (local-only) only when `mutate` fails to
+        // find an existing binding *anywhere* up the chain -- including
+        // past the function-call boundary, into the closure the call was
+        // made from. A function reusing a common name like `i` for its
+        // own first-use loop counter would find and overwrite the
+        // caller's or module's same-named variable instead of creating
+        // its own local, corrupting the caller's state after the call
+        // returns. With a loop counter specifically, and the caller
+        // itself in a loop that calls the function every iteration, this
+        // turns into the caller's own loop resetting its counter every
+        // iteration -- an infinite loop, not just a wrong value.
+        let src = r#"
+def inner() -> int:
+    i = 0
+    while i < 3:
+        i = i + 1
+    return i
+
+i = 10
+iterations = 0
+while i < 15:
+    result = inner()
+    i = i + 1
+    iterations = iterations + 1
+    if iterations > 20:
+        break
+final_i = i
+final_iterations = iterations
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("final_i"), Some(Value::Int(15)));
+        assert_eq!(
+            interp.env.borrow().get("final_iterations"),
+            Some(Value::Int(5)),
+            "the outer loop's own `i` must advance by exactly 1 per call to inner(), \
+             unaffected by inner()'s same-named local `i`"
+        );
+    }
+
+    #[test]
+    fn assignment_inside_nested_blocks_still_mutates_the_enclosing_local_within_one_call() {
+        // The fix above must not regress the ordinary, intra-function
+        // case: a variable declared once in a function and reassigned
+        // from inside a nested if/while/for block, all within the same
+        // call, still mutates that one variable rather than shadowing it
+        // per block -- only the function-call boundary itself stops the
+        // walk, not every nested block scope within one call.
+        let src = r#"
+def total_after_updates(xs: list[int]) -> int:
+    total = 0
+    for x in xs:
+        if x > 0:
+            total = total + x
+        else:
+            total = total - x
+    return total
+
+result = total_after_updates([1, -2, 3, -4])
+"#;
+        let module = parse(src).unwrap();
+        let mut interp = Interpreter::new();
+        interp.eval_module(&module).unwrap();
+        assert_eq!(interp.env.borrow().get("result"), Some(Value::Int(10)));
+    }
+
+    #[test]
+    fn question_mark_propagates_out_of_a_nested_operand_position() {
+        // `?` on a failing call produces a Value::Return sentinel meant to
+        // unwind the *enclosing function* immediately. Used directly as a
+        // statement's own value (`return fail()?`, `x = fail()?`) that
+        // sentinel is checked and re-propagated -- but used as a
+        // subexpression inside a larger expression (a call argument, a
+        // collection literal element, a binary/unary operand), the
+        // surrounding expression evaluation has to detect that same
+        // sentinel and re-propagate it too, instead of silently treating
+        // the raw error object as an ordinary value and letting execution
+        // continue. Every case below runs a `fail()?` in exactly one such
+        // position and checks the enclosing function actually stopped and
+        // returned the error, rather than pressing on to compute `999`.
+        let preamble = "class MyError:\n    message: str\n\nclass Wrapper:\n    value: int\n\ndef fail() -> int | MyError:\n    return MyError(\"boom\")\n\n";
+        let cases = [
+            // Call argument.
+            "def run() -> int | MyError:\n    items: list[int] = []\n    items.append(fail()?)\n    return 999\nresult = run()\n",
+            // Construct argument.
+            "def run() -> int | MyError:\n    w = Wrapper(fail()?)\n    return 999\nresult = run()\n",
+            // List literal element.
+            "def run() -> int | MyError:\n    xs = [fail()?]\n    return 999\nresult = run()\n",
+            // Set literal element.
+            "def run() -> int | MyError:\n    xs = {fail()?}\n    return 999\nresult = run()\n",
+            // Dict literal value.
+            "def run() -> int | MyError:\n    d = {\"k\": fail()?}\n    return 999\nresult = run()\n",
+            // Binary operand.
+            "def run() -> int | MyError:\n    total = 1 + fail()?\n    return 999\nresult = run()\n",
+            // Unary operand.
+            "def run() -> int | MyError:\n    total = -fail()?\n    return 999\nresult = run()\n",
+            // Attribute receiver.
+            "def run() -> int | MyError:\n    total = fail()?.message\n    return 999\nresult = run()\n",
+            // Index receiver.
+            "def run() -> int | MyError:\n    total = fail()?[0]\n    return 999\nresult = run()\n",
+            // Index operand.
+            "def run() -> int | MyError:\n    xs = [1, 2, 3]\n    total = xs[fail()?]\n    return 999\nresult = run()\n",
+        ];
+        for source in cases {
+            let full_source = format!("{preamble}{source}");
+            let module = parse(&full_source).unwrap();
+            let mut interp = Interpreter::new();
+            interp.eval_module(&module).unwrap();
+            let result = interp.env.borrow().get("result");
+            match result {
+                Some(Value::Object { ref class_name, .. }) if class_name == "MyError" => {}
+                other => panic!(
+                    "expected `?` to propagate the MyError out of run() for {source:?}, got {other:?}"
+                ),
+            }
+        }
     }
 
     #[test]
@@ -14289,12 +14512,20 @@ with Session.open() as value:
 
     #[test]
     fn test_with_unwinds_prior_context_when_later_setup_fails() {
+        // `cleaned` is a `Cell`, not a bare module-level `int` -- per
+        // docs/scope.md, assignment inside a function is always local
+        // (no `global`, no `nonlocal`), so a bare `cleaned = cleaned + 1`
+        // inside `first()` would create its own local shadowing the
+        // module-level `cleaned` instead of mutating it, the same as any
+        // other function. Shared, mutable state across scopes goes
+        // through an explicit object instead, exactly as the docs' own
+        // `Cell` example does.
         let src = r#"
-cleaned = 0
+cleaned = Cell(0)
 
 contextmanager def first():
     yield none
-    cleaned = cleaned + 1
+    cleaned.value = cleaned.value + 1
 
 contextmanager def second():
     raise "setup failed"
@@ -14307,7 +14538,10 @@ with first():
         let module = parse(src).unwrap();
         let mut interp = Interpreter::new();
         assert!(interp.eval_module(&module).is_err());
-        assert_eq!(interp.env.borrow().get("cleaned"), Some(Value::Int(1)));
+        let Some(Value::Object { fields, .. }) = interp.env.borrow().get("cleaned") else {
+            panic!("expected `cleaned` to be a Cell object");
+        };
+        assert_eq!(fields.borrow().get("value"), Some(&Value::Int(1)));
     }
 
     #[test]

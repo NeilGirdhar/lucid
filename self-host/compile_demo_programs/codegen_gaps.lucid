@@ -1,0 +1,45 @@
+class Builder:
+    prefix: str
+
+    def combine(self, items: list[str], tags: set[str]) -> str:
+        result = self.prefix
+        for item in items:
+            result = result + item
+        for tag in tags:
+            result = result + tag
+        return result
+
+    def with_tag(self, items: list[str], tags: set[str], tag: str) -> str:
+        tags.add(tag)
+        return self.combine(items, tags)
+
+def make_builder(prefix: str) -> Builder:
+    return Builder(prefix)
+
+def build_empty(prefix: str) -> str:
+    b = make_builder(prefix)
+    return b.combine([], {})
+
+def build_with_items(prefix: str) -> str:
+    b = make_builder(prefix)
+    return b.combine(["a", "b"], {})
+
+def build_with_tag(prefix: str, tag: str) -> str:
+    b = make_builder(prefix)
+    return b.with_tag([], {}, tag)
+
+def escape_all(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+
+def rename(s: str) -> str:
+    return s.replace("-", "_")
+
+def ok() -> int:
+    print(build_empty("x:"))
+    print(build_with_items("y:"))
+    print(build_with_tag("z:", "t1"))
+    print(escape_all("a\"b\nc\\d"))
+    print(rename("self-host-codegen"))
+    return 0
+
+print(ok())
