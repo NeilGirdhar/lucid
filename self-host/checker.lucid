@@ -1915,6 +1915,75 @@ class Checker:
                         return none
                     self.error("sorted() supports only a single list[str] argument in this subset", call.span)
                     return none
+                # `argv()` -- the compiled binary's own process
+                # arguments, `list[str]`, always including the program
+                # name itself at index 0 (matching the reference
+                # interpreter's own `sys.argv[0]`) -- this subset has no
+                # module-import mechanism (`import sys`), so it's a
+                # bare builtin instead, the same shape `len`/`sorted`
+                # already are.
+                if callee.name == "argv":
+                    if len(arg_types) == 0:
+                        return ListType(StrType())
+                    if any_unknown:
+                        return none
+                    self.error("argv() takes no arguments in this subset", call.span)
+                    return none
+                # `read_file(path)`/`write_file(path, content)` --
+                # types.lucid's own `resolve_all_declarations` (every
+                # cross-file import) and self_lucid.lucid's own driver
+                # (reading a source file to compile, writing the
+                # generated C) -- real reference-interpreter builtins
+                # (`lucid-runtime/src/lib.rs`), reporting failure as a
+                # `ParseError` value the same way any other Error
+                # class's `?`/match narrowing already works, once
+                # resolve_all_declarations's own synthesized `class
+                # ParseError:` (see its header comment in types.lucid)
+                # registers it as a real class.
+                if callee.name == "read_file":
+                    if len(arg_types) == 1:
+                        match arg_types[0] as rf_at:
+                            case StrType:
+                                # A bracket literal's own element C type
+                                # is inferred from its first element's
+                                # concrete type (StrType), not the `:
+                                # list[LType]` annotation -- that
+                                # bidirectional inference only applies to
+                                # an *empty* literal (see check_call's
+                                # own header comment on that). Building
+                                # the list via .append() instead (already
+                                # well-tested: a concrete LType subtype
+                                # value flowing into a list[LType] via
+                                # .append() gets the same upcast a
+                                # function argument does) avoids it.
+                                members: list[LType] = []
+                                members.append(StrType())
+                                members.append(ClassType("ParseError"))
+                                return UnionLType(members)
+                            case _:
+                                pass
+                    if any_unknown:
+                        return none
+                    self.error("read_file() takes a single str argument in this subset", call.span)
+                    return none
+                if callee.name == "write_file":
+                    if len(arg_types) == 2:
+                        match arg_types[0] as wf_at0:
+                            case StrType:
+                                match arg_types[1] as wf_at1:
+                                    case StrType:
+                                        wf_members: list[LType] = []
+                                        wf_members.append(NoneType())
+                                        wf_members.append(ClassType("ParseError"))
+                                        return UnionLType(wf_members)
+                                    case _:
+                                        pass
+                            case _:
+                                pass
+                    if any_unknown:
+                        return none
+                    self.error("write_file() takes two str arguments (path, content) in this subset", call.span)
+                    return none
                 if any_unknown:
                     return none
                 match find_signature_assignable(self.classes, self.functions, callee.name, arg_types) as sig:

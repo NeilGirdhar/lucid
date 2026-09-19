@@ -1,0 +1,60 @@
+# The actual bootstrap artifact this whole directory has been building
+# toward: a single driver that imports self-host/lexer.lucid,
+# self-host/parser.lucid, self-host/checker.lucid, and
+# self-host/codegen.lucid together (transitively pulling in ast.lucid
+# and types.lucid too) and, once compiled through that same pipeline
+# and linked with `gcc`, is a native binary that lexes, parses, checks,
+# and generates C for a Lucid source file -- with no dependency on the
+# reference interpreter to run. `compile_source`/`compile_path_to_file`
+# mirror compile_demo.lucid's own identically-named functions (this
+# file is meant to run standalone, so it doesn't import them from
+# there) -- except `compile_source`'s own `parse(source)` can't use
+# `?` the way compile_demo.lucid's does: `?` in this subset only
+# narrows a union with exactly one error member (see checker.lucid's
+# own header comment), and `parse` returns two (`ParserError |
+# LexError`), so it's an explicit match instead, the same shape
+# types.lucid's own resolve_all_declarations already uses for the same
+# call. See self-host/README.md for the bootstrap milestone this
+# reaches and how to build/run it.
+#
+# The source and output paths are hardcoded for the first self-compile
+# probe -- see self-host/README.md for the argv()-based version.
+
+from .parser import parse, ParserError
+from .lexer import LexError
+from .checker import check_program, CheckError
+from .codegen import codegen_module
+
+def compile_source(source: str) -> str | list[CheckError] | ParserError | LexError:
+    match parse(source) as parsed:
+        case ParsedModule:
+            errors = check_program(parsed.statements)
+            if len(errors) > 0:
+                return errors
+            return codegen_module(parsed.statements)
+        case ParserError:
+            return parsed
+        case LexError:
+            return parsed
+
+def compile_path_to_file(source_path: str, output_path: str):
+    match read_file(source_path) as source:
+        case str:
+            match compile_source(source) as result:
+                case str:
+                    match write_file(output_path, result) as write_outcome:
+                        case none:
+                            print("wrote " + output_path + " (" + str(len(result)) + " bytes)")
+                        case ParseError:
+                            print("WRITE ERROR:", write_outcome.message)
+                case list[CheckError]:
+                    for e in result:
+                        print("CHECK ERROR:", e.message)
+                case ParserError:
+                    print("PARSE ERROR:", result.message)
+                case LexError:
+                    print("LEX ERROR:", result.message)
+        case ParseError:
+            print("READ ERROR:", source.message)
+
+compile_path_to_file("examples/vectors.lucid", "/tmp/self_lucid_out.c")

@@ -49,7 +49,7 @@
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, SetExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, FloatLit, Propagate, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, FunctionDef, Param, FromImport, Hoisted, hoist_propagate
 from .types import LType, IntType, BoolType, StrType, FloatType, ClassType, ListType, DictType, SetType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, resolve_all_declarations, inherited_fields, class_assignable_to, is_subclass_of, class_tag, union_has_none_member, union_member_type_equal
 
-runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}\n\n// str(n)/str(f) -- self-host/checker.lucid's/self-host/codegen.lucid's\n// own dominant `str()` use (`str(expr.span.line)`, `str(err_index)`,\n// `str(lit.value)` for a FloatLit's own float field), the other\n// direction from int(...)/float(...).\nstatic const char *lucid_rt_str_of_int(long n) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%ld\", n);\n    return result;\n}\n\n// The reference interpreter's own str(f)/print(f) formats a float as\n// Rust's f64 Display does: the *shortest* plain-decimal (never\n// scientific notation, unlike \"%g\") representation that round-trips\n// back to the exact same double (str(3.0) == \"3\", but str(3.5 / 1.5)\n// == \"2.3333333333333335\", not \"2.33333\" -- a fixed \"%g\" precision\n// (this subset's first draft used a bare \"%g\", 6 significant digits by\n// default) silently truncated any value that didn't happen to round-\n// trip in 6 digits, a real, previously-undiscovered miscompile caught\n// only by self-host/interpreter.lucid's own float division needing\n// more precision than any earlier compile_demo_programs/*.lucid file's\n// float arithmetic happened to exercise; \"%.*g\" specifically (tried\n// first) was then rejected too -- it round-trips correctly but picks\n// scientific notation at low precision, \"1e+02\" for 100.0 instead of\n// \"100\", diverging from Rust's Display, which never emits scientific\n// notation at all). Tries increasing decimal places from 0 up to 17\n// (enough for any f64) and stops at the first one whose own strtod\n// parses back to the exact same bits -- the standard technique for\n// shortest-round-trip formatting without a full Grisu/Ryu\n// implementation, verified directly against the reference interpreter\n// for several values including a non-terminating decimal\n// (2.3333333333333335), a sum with a rounding artifact (0.1 + 0.2 ==\n// 0.30000000000000004), and a whole number (100.0 == \"100\").\nstatic const char *lucid_rt_str_of_float(double f) {\n    char *result = malloc(64);\n    int prec = 0;\n    while (prec <= 17) {\n        snprintf(result, 64, \"%.*f\", prec, f);\n        if (strtod(result, NULL) == f) {\n            break;\n        }\n        prec++;\n    }\n    return result;\n}\n\n// s.endswith(suffix) -- checker.lucid's/codegen.lucid's own dominant\n// `?`-error-recognition heuristic (`mt.name.endswith(\"Error\")`).\nstatic long lucid_rt_str_endswith(const char *s, const char *suffix) {\n    long ls = (long) strlen(s);\n    long lsuf = (long) strlen(suffix);\n    if (lsuf > ls) {\n        return 0;\n    }\n    return strcmp(s + (ls - lsuf), suffix) == 0;\n}\n\n// s.replace(old, new) -- codegen.lucid's own C-string-escaping helper\n// chains several of these calls together; verified directly against\n// the reference interpreter: replaces every occurrence, like Python's\n// str.replace(old, new) with no count limit. Never called with an\n// empty old argument in this subset.\nstatic const char *lucid_rt_str_replace(const char *s, const char *old, const char *repl) {\n    long old_len = (long) strlen(old);\n    long repl_len = (long) strlen(repl);\n    long count = 0;\n    const char *p = s;\n    while (1) {\n        const char *found = strstr(p, old);\n        if (!found) {\n            break;\n        }\n        count++;\n        p = found + old_len;\n    }\n    long result_len = (long) strlen(s) + count * (repl_len - old_len);\n    char *result = malloc((size_t) result_len + 1);\n    char *out = result;\n    p = s;\n    while (1) {\n        const char *found = strstr(p, old);\n        if (!found) {\n            strcpy(out, p);\n            break;\n        }\n        long prefix_len = (long) (found - p);\n        memcpy(out, p, (size_t) prefix_len);\n        out += prefix_len;\n        memcpy(out, repl, (size_t) repl_len);\n        out += repl_len;\n        p = found + old_len;\n    }\n    return result;\n}\n\n// a ** b -- self-host/interpreter.lucid's own `l.value ** r.value`\n// (always two ints, see checker.lucid's own POW comment); C has no\n// power operator. Plain repeated multiplication -- exponentiation by\n// squaring would be faster but nothing in this subset needs a large\n// exponent. Verified directly against the reference interpreter for\n// b == 0 (1, including 0 ** 0) and a handful of positive exponents; a\n// negative exponent is never produced by anything this subset actually\n// compiles (the reference interpreter's own int ** negative-int isn't a\n// sensible int either -- see self-host/README.md's Design notes).\nstatic long lucid_rt_ipow(long a, long b) {\n    long result = 1;\n    long i = 0;\n    while (i < b) {\n        result *= a;\n        i++;\n    }\n    return result;\n}"
+runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n#include <errno.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}\n\n// str(n)/str(f) -- self-host/checker.lucid's/self-host/codegen.lucid's\n// own dominant `str()` use (`str(expr.span.line)`, `str(err_index)`,\n// `str(lit.value)` for a FloatLit's own float field), the other\n// direction from int(...)/float(...).\nstatic const char *lucid_rt_str_of_int(long n) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%ld\", n);\n    return result;\n}\n\n// The reference interpreter's own str(f)/print(f) formats a float as\n// Rust's f64 Display does: the *shortest* plain-decimal (never\n// scientific notation, unlike \"%g\") representation that round-trips\n// back to the exact same double (str(3.0) == \"3\", but str(3.5 / 1.5)\n// == \"2.3333333333333335\", not \"2.33333\" -- a fixed \"%g\" precision\n// (this subset's first draft used a bare \"%g\", 6 significant digits by\n// default) silently truncated any value that didn't happen to round-\n// trip in 6 digits, a real, previously-undiscovered miscompile caught\n// only by self-host/interpreter.lucid's own float division needing\n// more precision than any earlier compile_demo_programs/*.lucid file's\n// float arithmetic happened to exercise; \"%.*g\" specifically (tried\n// first) was then rejected too -- it round-trips correctly but picks\n// scientific notation at low precision, \"1e+02\" for 100.0 instead of\n// \"100\", diverging from Rust's Display, which never emits scientific\n// notation at all). Tries increasing decimal places from 0 up to 17\n// (enough for any f64) and stops at the first one whose own strtod\n// parses back to the exact same bits -- the standard technique for\n// shortest-round-trip formatting without a full Grisu/Ryu\n// implementation, verified directly against the reference interpreter\n// for several values including a non-terminating decimal\n// (2.3333333333333335), a sum with a rounding artifact (0.1 + 0.2 ==\n// 0.30000000000000004), and a whole number (100.0 == \"100\").\nstatic const char *lucid_rt_str_of_float(double f) {\n    char *result = malloc(64);\n    int prec = 0;\n    while (prec <= 17) {\n        snprintf(result, 64, \"%.*f\", prec, f);\n        if (strtod(result, NULL) == f) {\n            break;\n        }\n        prec++;\n    }\n    return result;\n}\n\n// s.endswith(suffix) -- checker.lucid's/codegen.lucid's own dominant\n// `?`-error-recognition heuristic (`mt.name.endswith(\"Error\")`).\nstatic long lucid_rt_str_endswith(const char *s, const char *suffix) {\n    long ls = (long) strlen(s);\n    long lsuf = (long) strlen(suffix);\n    if (lsuf > ls) {\n        return 0;\n    }\n    return strcmp(s + (ls - lsuf), suffix) == 0;\n}\n\n// s.replace(old, new) -- codegen.lucid's own C-string-escaping helper\n// chains several of these calls together; verified directly against\n// the reference interpreter: replaces every occurrence, like Python's\n// str.replace(old, new) with no count limit. Never called with an\n// empty old argument in this subset.\nstatic const char *lucid_rt_str_replace(const char *s, const char *old, const char *repl) {\n    long old_len = (long) strlen(old);\n    long repl_len = (long) strlen(repl);\n    long count = 0;\n    const char *p = s;\n    while (1) {\n        const char *found = strstr(p, old);\n        if (!found) {\n            break;\n        }\n        count++;\n        p = found + old_len;\n    }\n    long result_len = (long) strlen(s) + count * (repl_len - old_len);\n    char *result = malloc((size_t) result_len + 1);\n    char *out = result;\n    p = s;\n    while (1) {\n        const char *found = strstr(p, old);\n        if (!found) {\n            strcpy(out, p);\n            break;\n        }\n        long prefix_len = (long) (found - p);\n        memcpy(out, p, (size_t) prefix_len);\n        out += prefix_len;\n        memcpy(out, repl, (size_t) repl_len);\n        out += repl_len;\n        p = found + old_len;\n    }\n    return result;\n}\n\n// a ** b -- self-host/interpreter.lucid's own `l.value ** r.value`\n// (always two ints, see checker.lucid's own POW comment); C has no\n// power operator. Plain repeated multiplication -- exponentiation by\n// squaring would be faster but nothing in this subset needs a large\n// exponent. Verified directly against the reference interpreter for\n// b == 0 (1, including 0 ** 0) and a handful of positive exponents; a\n// negative exponent is never produced by anything this subset actually\n// compiles (the reference interpreter's own int ** negative-int isn't a\n// sensible int either -- see self-host/README.md's Design notes).\nstatic long lucid_rt_ipow(long a, long b) {\n    long result = 1;\n    long i = 0;\n    while (i < b) {\n        result *= a;\n        i++;\n    }\n    return result;\n}\n\n// argv() -- process arguments, stashed here by codegen_entry_point's\n// own synthesized `main(int argc, char **argv)` as the first thing it\n// does, before any top-level statement runs. lucid_rt_argv itself (the\n// list[str]-returning builtin) lives in sorted_str_prelude instead,\n// since it needs lucid_list_str to already exist.\nstatic int lucid_argc = 0;\nstatic char **lucid_argv = 0;\n\n// read_file(path)/write_file(path, content) -- codegen_expr's own\n// Call-Ident case wraps this into the real `str | ParseError`/`none |\n// ParseError` union value (a GCC statement expression, since\n// runtime_prelude is emitted before any union struct typedef exists\n// and so can't name one itself -- see that call site's own comment).\n// `.value` on failure is a plain strerror(errno) message, not Rust's\n// io::Error Display text the reference interpreter's own read_file/\n// write_file produce (`lucid-runtime/src/lib.rs`) -- this subset's\n// error path is never differentially tested against that exact\n// string, only that a failure is recoverable at all, so the divergence\n// is undocumented drift, not a bug.\ntypedef struct {\n    int ok;\n    const char *value;\n} lucid_rt_read_result;\n\nstatic lucid_rt_read_result lucid_rt_read_file_raw(const char *path) {\n    lucid_rt_read_result r;\n    FILE *f = fopen(path, \"rb\");\n    if (!f) {\n        r.ok = 0;\n        r.value = strerror(errno);\n        return r;\n    }\n    fseek(f, 0, SEEK_END);\n    long size = ftell(f);\n    fseek(f, 0, SEEK_SET);\n    char *buf = malloc((size_t) size + 1);\n    size_t got = fread(buf, 1, (size_t) size, f);\n    buf[got] = 0;\n    fclose(f);\n    r.ok = 1;\n    r.value = buf;\n    return r;\n}\n\ntypedef struct {\n    int ok;\n    const char *value;\n} lucid_rt_write_result;\n\nstatic lucid_rt_write_result lucid_rt_write_file_raw(const char *path, const char *content) {\n    lucid_rt_write_result r;\n    FILE *f = fopen(path, \"wb\");\n    if (!f) {\n        r.ok = 0;\n        r.value = strerror(errno);\n        return r;\n    }\n    fwrite(content, 1, strlen(content), f);\n    fclose(f);\n    r.ok = 1;\n    r.value = 0;\n    return r;\n}"
 
 # `sorted(names)` -- types.lucid's/checker.lucid's own dominant use
 # (`sorted_member_names`, `class_tag`), sorting a *fresh copy* of a
@@ -61,7 +61,7 @@ runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\
 # instead. qsort's own comparator takes `const void *`, matching a
 # `lucid_list_str`'s own `items` array element (`const char **`) once
 # cast.
-sorted_str_prelude = "static int lucid_rt_strcmp_qsort(const void *a, const void *b) {\n    const char *sa = *(const char **) a;\n    const char *sb = *(const char **) b;\n    return strcmp(sa, sb);\n}\n\nstatic lucid_list_str *lucid_rt_sorted_str(lucid_list_str *lst) {\n    lucid_list_str *copy = lucid_list_str_of(lst->len, lst->items);\n    qsort(copy->items, copy->len, sizeof(const char *), lucid_rt_strcmp_qsort);\n    return copy;\n}"
+sorted_str_prelude = "static int lucid_rt_strcmp_qsort(const void *a, const void *b) {\n    const char *sa = *(const char **) a;\n    const char *sb = *(const char **) b;\n    return strcmp(sa, sb);\n}\n\nstatic lucid_list_str *lucid_rt_sorted_str(lucid_list_str *lst) {\n    lucid_list_str *copy = lucid_list_str_of(lst->len, lst->items);\n    qsort(copy->items, copy->len, sizeof(const char *), lucid_rt_strcmp_qsort);\n    return copy;\n}\n\n// argv() -- lucid_argc/lucid_argv are set by main() itself (see\n// codegen_entry_point) before any top-level statement runs, so this is\n// always safe to call from anywhere in a compiled program's own top-\n// level code or any function/method it calls.\nstatic lucid_list_str *lucid_rt_argv(void) {\n    lucid_list_str *result = lucid_list_str_new();\n    int i = 0;\n    while (i < lucid_argc) {\n        lucid_list_str_append(result, lucid_argv[i]);\n        i = i + 1;\n    }\n    return result;\n}"
 
 # Every class gets a `typedef struct Name Name;` forward declaration,
 # emitted for every class before any class's full struct body -- a
@@ -473,7 +473,30 @@ def sort_union_types(types: list[UnionLType]) -> list[UnionLType]:
                 result.append(t)
     return result
 
-def dispatch_op_name(op: str) -> str | none:
+# `collect_dict_value_types`'s own dict-iteration over `self.functions`/
+# `self.classes` (both `dict[str, ...]`) never sorted its own `found`
+# list before this -- harmless for a single compiled binary (no dict
+# value type ever references another one, so struct-declaration order
+# doesn't affect correctness) but a real reproducibility gap: the
+# reference interpreter's own `Value::Dict` is a HashMap, so which
+# `lucid_dict_str_<V>` struct gets emitted first isn't guaranteed
+# stable across runs, unlike every other per-run-nondeterministic
+# ordering this pipeline already sorts (module-level globals, union
+# types, sealed-hierarchy tags). Same sort-by-mangled-name pattern as
+# sort_union_types just above.
+def sort_dict_value_types(types: list[LType]) -> list[LType]:
+    names: list[str] = []
+    for t in types:
+        names.append(mangle_component(t))
+    ordered_names = sorted(names)
+    result: list[LType] = []
+    for n in ordered_names:
+        for t in types:
+            if mangle_component(t) == n:
+                result.append(t)
+    return result
+
+def codegen_dispatch_op_name(op: str) -> str | none:
     if op == "ADD":
         return "__add__"
     if op == "SUB":
@@ -596,7 +619,7 @@ class Codegen:
     # verified Lucid, not something checker.lucid rejects). Populated
     # once, in codegen_module, before any class/function/method is
     # emitted; every function/method's own `known` is seeded with a
-    # COPY of this (see copy_type_scope) so its own locals never leak
+    # COPY of this (see codegen_copy_type_scope) so its own locals never leak
     # back into it. `codegen_entry_point`'s own generated `main()` is
     # the one place that must NOT redeclare these names as its own
     # C locals (they're already declared at file scope) -- see its
@@ -837,6 +860,18 @@ class Codegen:
                                 case _:
                                     pass
                             return none
+                        if callee.name == "argv" and len(result.args) == 0:
+                            return ListType(StrType())
+                        if callee.name == "read_file" and len(result.args) == 1:
+                            rf_members: list[LType] = []
+                            rf_members.append(StrType())
+                            rf_members.append(ClassType("ParseError"))
+                            return UnionLType(rf_members)
+                        if callee.name == "write_file" and len(result.args) == 2:
+                            wf_members2: list[LType] = []
+                            wf_members2.append(NoneType())
+                            wf_members2.append(ClassType("ParseError"))
+                            return UnionLType(wf_members2)
                         # Mirrors codegen_expr's own Call-Ident case (and
                         # checker.lucid's check_call): peek at the
                         # callee's first registered signature so an
@@ -1037,7 +1072,7 @@ class Codegen:
                         return none
 
     def dispatch_return_type(self, op: str, left: LType | none, right: LType | none) -> LType | none:
-        match dispatch_op_name(op) as dunder:
+        match codegen_dispatch_op_name(op) as dunder:
             case str:
                 match left as lt:
                     case LType:
@@ -1090,7 +1125,7 @@ class Codegen:
                     case _:
                         pass
                 if is_dispatch:
-                    match dispatch_op_name(result.op) as dunder:
+                    match codegen_dispatch_op_name(result.op) as dunder:
                         case str:
                             match left_type as lt:
                                 case LType:
@@ -1550,6 +1585,36 @@ class Codegen:
                         # untouched).
                         if callee.name == "sorted" and len(result.args) == 1:
                             return "lucid_rt_sorted_str(" + arg_codes[0] + ")"
+                        if callee.name == "argv" and len(result.args) == 0:
+                            return "lucid_rt_argv()"
+                        # `read_file`/`write_file` -- the runtime helper
+                        # (`lucid_rt_read_file_raw`/`lucid_rt_write_file_
+                        # raw`, in runtime_prelude) returns a small fixed
+                        # C struct (`.ok`, `.value`), never the dynamic
+                        # `lucid_union_*` type itself: runtime_prelude is
+                        # emitted before any union struct typedef exists
+                        # (codegen_module's own emission order), so it
+                        # can't name one. The actual union value is built
+                        # here instead, in a GCC statement expression
+                        # (this codebase already targets `gcc`
+                        # unconditionally -- see spec_tests.rs's own
+                        # compile step -- so the extension is safe),
+                        # reusing wrap_union_value exactly like a `return`
+                        # statement's own union wrap already does.
+                        if callee.name == "read_file" and len(result.args) == 1:
+                            rf_members: list[LType] = []
+                            rf_members.append(StrType())
+                            rf_members.append(ClassType("ParseError"))
+                            rf_ok = wrap_union_value(rf_members, StrType(), "__lucid_rf.value")
+                            rf_err = wrap_union_value(rf_members, ClassType("ParseError"), "lucid_new_ParseError(__lucid_rf.value)")
+                            return "({ lucid_rt_read_result __lucid_rf = lucid_rt_read_file_raw(" + arg_codes[0] + "); __lucid_rf.ok ? " + rf_ok + " : " + rf_err + "; })"
+                        if callee.name == "write_file" and len(result.args) == 2:
+                            wf_members3: list[LType] = []
+                            wf_members3.append(NoneType())
+                            wf_members3.append(ClassType("ParseError"))
+                            wf_ok = wrap_union_value(wf_members3, NoneType(), "")
+                            wf_err = wrap_union_value(wf_members3, ClassType("ParseError"), "lucid_new_ParseError(__lucid_wf.value)")
+                            return "({ lucid_rt_write_result __lucid_wf = lucid_rt_write_file_raw(" + arg_codes[0] + ", " + arg_codes[1] + "); __lucid_wf.ok ? " + wf_ok + " : " + wf_err + "; })"
                         match find_signature_assignable(self.classes, self.functions, callee.name, arg_types) as sig:
                             case FuncSig:
                                 # A subtype argument value (`Binary`,
@@ -2488,7 +2553,24 @@ class Codegen:
                 case none:
                     pass
             i = i + 1
-        return decl + "\n" + indent + join_with(branches, " else ")
+        # A trailing `else { __builtin_unreachable(); }` -- checker.lucid
+        # already guarantees every one of `narrow`'s own canonical
+        # members has a branch here, so this is never actually taken for
+        # a program that passed checking, but an if/else-if chain with no
+        # syntactic `else` at all leaves `gcc` unable to prove that on
+        # its own: reaching the closing brace of a non-`void` C function
+        # without a `return` is undefined behavior (C11 6.9.1p12), not
+        # just "falls through to whatever's next" the way it would for a
+        # match used as an ordinary mid-function statement -- real under
+        # `-O2`, where gcc's own flow analysis can (and does) act on the
+        # missing terminator rather than just warning about it the way
+        # `-Wreturn-type` does at `-O0`. Every other exhaustive if/else-if
+        # chain this codegen emits (codegen_match's own union case,
+        # codegen_sealed_match) gets the identical guard, for the same
+        # reason -- harmless when the match isn't a function's own last
+        # statement either, since `__builtin_unreachable()` only matters
+        # if that branch is ever actually reached.
+        return decl + "\n" + indent + join_with(branches, " else ") + " else {\n" + indent + "    __builtin_unreachable();\n" + indent + "}"
 
     def codegen_propagate_return(self, prop: Propagate, indent: str, known: dict[str, LType], expected_return: LType | none) -> str:
         outer_prelude2 = ""
@@ -2788,7 +2870,13 @@ class Codegen:
                 # arm match doesn't end up with indent re-inserted after
                 # every "else " the way naively indenting each arm on
                 # its own would.
-                return match_prelude + decl + "\n" + indent + join_with(branches, " else ")
+                # A trailing `else { __builtin_unreachable(); }` -- see
+                # codegen_union_narrowing_return's own comment on why
+                # (the same C11 6.9.1p12 concern, one level more
+                # important here since an ordinary `match` statement,
+                # not just the narrowing-return desugaring, can
+                # legitimately be a function's own last statement).
+                return match_prelude + decl + "\n" + indent + join_with(branches, " else ") + " else {\n" + indent + "    __builtin_unreachable();\n" + indent + "}"
             case ClassType:
                 match self.classes.get(st.name, none) as cls:
                     case ClassSig:
@@ -2823,7 +2911,9 @@ class Codegen:
         branches: list[str] = []
         for arm in m.arms:
             branches.append(self.codegen_sealed_match_arm(arm, root, temp, m.subject_alias, indent, known, broken_flag, expected_return))
-        return decl + "\n" + indent + join_with(branches, " else ")
+        # A trailing `else { __builtin_unreachable(); }` -- see
+        # codegen_union_narrowing_return's own comment on why.
+        return decl + "\n" + indent + join_with(branches, " else ") + " else {\n" + indent + "    __builtin_unreachable();\n" + indent + "}"
 
     # A concrete-class arm narrows `temp` (typed as the sealed root's
     # own pointer type) down to the arm's own concrete subclass with an
@@ -2839,7 +2929,7 @@ class Codegen:
     # would be an ordinary "undefined name", the same as any other
     # unbound alias in this subset.
     def codegen_sealed_match_arm(self, arm: MatchArm, root: str, temp: str, subject_alias: str | none, indent: str, known: dict[str, LType], broken_flag: str | none, expected_return: LType | none) -> str:
-        arm_known: dict[str, LType] = copy_type_scope(known)
+        arm_known: dict[str, LType] = codegen_copy_type_scope(known)
         narrowed: str | none = none
         match arm.pattern as pat:
             case TypePattern:
@@ -2897,7 +2987,7 @@ class Codegen:
     # *inside* this arm's own `{ }` block, not hoisted with the rest of
     # the function's locals, since it has a different type in each arm.
     def codegen_match_arm(self, arm: MatchArm, subject_type: UnionLType, temp: str, subject_alias: str | none, indent: str, known: dict[str, LType], broken_flag: str | none, expected_return: LType | none) -> str:
-        arm_known: dict[str, LType] = copy_type_scope(known)
+        arm_known: dict[str, LType] = codegen_copy_type_scope(known)
         narrowed: LType | none = none
         match arm.pattern as pat:
             case TypePattern:
@@ -3417,7 +3507,7 @@ class Codegen:
 
     def codegen_function(self, fn: FunctionDef, sig: FuncSig) -> str:
         param_list = self.c_param_list(fn.params)
-        known: dict[str, LType] = copy_type_scope(self.module_scope)
+        known: dict[str, LType] = codegen_copy_type_scope(self.module_scope)
         i = 0
         while i < len(fn.params) and i < len(sig.param_types):
             known[c_safe_ident(fn.params[i].name)] = sig.param_types[i]
@@ -3439,7 +3529,13 @@ class Codegen:
         for name in self.module_scope:
             module_names.add(name)
         full_body = self.codegen_body([], top_level, known, module_names, none)
-        return "int main(void) {\n" + full_body + "\n}"
+        # `int main(int argc, char **argv)`, not `int main(void)` --
+        # `argv()` (a new builtin, mirroring `sorted()`'s own three
+        # wiring points) needs the real process arguments, stashed into
+        # a pair of file-scope statics (`lucid_argc`/`lucid_argv`,
+        # declared in runtime_prelude) as the first thing `main` does,
+        # before any top-level statement runs.
+        return "int main(int argc, char **argv) {\n    lucid_argc = argc;\n    lucid_argv = argv;\n" + full_body + "\n}"
 
     def codegen_forward_decl(self, fn: FunctionDef, sig: FuncSig) -> str:
         return c_type_of(sig.return_type) + " " + mangled_name(self.functions, sig) + "(" + self.c_param_list(fn.params) + ");"
@@ -3503,7 +3599,7 @@ class Codegen:
                         case _:
                             pass
                 case FunctionStmt:
-                    fn_known: dict[str, LType] = copy_type_scope(known)
+                    fn_known: dict[str, LType] = codegen_copy_type_scope(known)
                     for p in result.function.params:
                         match resolve_type_expr(p.type_annotation) as pt:
                             case LType:
@@ -3512,12 +3608,12 @@ class Codegen:
                                 pass
                     self.collect_var_union_types(result.function.body, found, fn_known)
                 case ClassDef:
-                    base_method_known: dict[str, LType] = copy_type_scope(known)
+                    base_method_known: dict[str, LType] = codegen_copy_type_scope(known)
                     base_method_known["self"] = ClassType(result.name)
                     for member in result.body:
                         match member as m:
                             case MethodMember:
-                                method_known: dict[str, LType] = copy_type_scope(base_method_known)
+                                method_known: dict[str, LType] = codegen_copy_type_scope(base_method_known)
                                 mi = 1
                                 while mi < len(m.method.params):
                                     mp = m.method.params[mi]
@@ -3575,7 +3671,21 @@ class Codegen:
                                 case _:
                                     pass
                         case _:
-                            pass
+                            # A plain-expression match subject (`match
+                            # read_file(path) as source:`) whose own
+                            # union type comes from a builtin's
+                            # hardcoded infer_expr_type case (read_file/
+                            # write_file/argv's siblings), never a
+                            # registered signature or field --
+                            # collect_union_types' scan can't find these
+                            # either, the same gap the Propagate case
+                            # above already closes for `?`.
+                            match self.infer_expr_type(result.subject, known) as msub_t:
+                                case UnionLType:
+                                    if not union_already_found(found, msub_t):
+                                        found.append(msub_t)
+                                case _:
+                                    pass
                     for arm in result.arms:
                         self.collect_var_union_types(arm.body, found, known)
                 case _:
@@ -3857,7 +3967,7 @@ class Codegen:
         # walk needed for that half). Emitted after the per-class list
         # types above, since a list-valued dict needs its own element's
         # list struct to already exist.
-        all_dict_value_types = self.collect_dict_value_types(all_decls)
+        all_dict_value_types = sort_dict_value_types(self.collect_dict_value_types(all_decls))
         for dt in all_dict_value_types:
             match dt as dtt:
                 case ListType:
@@ -3884,7 +3994,7 @@ class Codegen:
         # registered from an import, say). Sorted by name, same
         # reproducibility reason as the module-level globals below.
         all_union_types = self.collect_union_types()
-        self.collect_var_union_types(all_decls, all_union_types, copy_type_scope(self.module_scope))
+        self.collect_var_union_types(all_decls, all_union_types, codegen_copy_type_scope(self.module_scope))
         # `d.get(key, none)` on any `dict[str, V]` (checker.lucid's own
         # dominant `.get()` shape once dict[str, V].get() started
         # returning `V | none` for a `none` default -- see check_call's
@@ -4061,7 +4171,7 @@ def codegen_method_param_list(cls: ClassSig, params: list[Param]) -> str:
     return join_with(parts, ", ")
 
 def codegen_method(cg: Codegen, cls: ClassSig, fn: FunctionDef, sig: FuncSig) -> str:
-    known: dict[str, LType] = copy_type_scope(cg.module_scope)
+    known: dict[str, LType] = codegen_copy_type_scope(cg.module_scope)
     known["self"] = ClassType(cls.name)
     i = 1
     while i < len(fn.params) and i - 1 < len(sig.param_types):
@@ -4074,7 +4184,7 @@ def codegen_method(cg: Codegen, cls: ClassSig, fn: FunctionDef, sig: FuncSig) ->
 def codegen_method_forward_decl(cls: ClassSig, fn: FunctionDef, sig: FuncSig) -> str:
     return c_type_of(sig.return_type) + " " + method_c_name(cls.name, fn.name) + "(" + codegen_method_param_list(cls, fn.params) + ");"
 
-def copy_type_scope(scope: dict[str, LType]) -> dict[str, LType]:
+def codegen_copy_type_scope(scope: dict[str, LType]) -> dict[str, LType]:
     copied: dict[str, LType] = {:}
     for key in scope:
         copied[key] = scope[key]

@@ -783,6 +783,33 @@ def resolve_import_path(module_name: str) -> str:
 # each file once.
 def resolve_all_declarations(stmts: list[Stmt], seen: set[str]) -> list[Stmt]:
     declarations: list[Stmt] = []
+    # `read_file`/`write_file` (both real reference-interpreter
+    # builtins, `lucid-runtime/src/lib.rs`'s own `register_builtin_
+    # exceptions`) report failure as a `ParseError` value -- a genuine
+    # class, not just a name this subset's `?`/`match` treat specially,
+    # so it needs a real `ClassSig` (struct, constructor, `.message`
+    # field) the same way any other class here does. Nothing in
+    # self-host/ ever writes `class ParseError:` -- the reference
+    # compiler injects its whole builtin-exception prelude the same
+    # way, before any user module runs (see `register_builtin_
+    # exceptions`'s own comment) -- so it's synthesized here instead,
+    # by parsing a one-line literal and splicing the resulting
+    # `ClassDef` into `declarations` exactly like any real import's
+    # own. `seen` already threads a single shared set through the
+    # whole recursive call tree from one top-level `resolve_all_
+    # declarations(stmts, {})` (check_module/codegen_module's own
+    # call), so guarding on a sentinel key here -- checked first, on
+    # every recursive call, same as any real path -- guarantees this
+    # happens exactly once per compile, regardless of how many files
+    # import how many others.
+    if "<builtin:ParseError>" not in seen:
+        seen.add("<builtin:ParseError>")
+        match parse("class ParseError:\n    message: str\n") as builtin_parsed:
+            case ParsedModule:
+                for builtin_decl in builtin_parsed.statements:
+                    declarations.append(builtin_decl)
+            case _:
+                pass
     for stmt in stmts:
         match stmt as result:
             case FromImport:
