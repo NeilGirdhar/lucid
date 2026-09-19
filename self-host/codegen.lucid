@@ -49,7 +49,7 @@
 from .ast import Expr, LiteralExpr, Ident, Binary, Unary, Call, Construct, Attribute, Index, ListExpr, DictExpr, SetExpr, Arg, IntLit, BoolLit, StrLit, NoneLit, FloatLit, Propagate, Stmt, ClassDef, ClassMember, FieldMember, MethodMember, FunctionStmt, VarDef, Assignment, If, For, While, Return, Break, Continue, Pass, ExprStmt, MetadataStmt, MatchStmt, MatchArm, Pattern, IdentPattern, TypePattern, WildcardPattern, LiteralPattern, FunctionDef, Param, FromImport, Hoisted, hoist_propagate
 from .types import LType, IntType, BoolType, StrType, FloatType, ClassType, ListType, DictType, SetType, NoneType, UnionLType, type_name, mangle_component, types_equal, assignable_to, sorted_union_members, resolve_type_expr, FieldSig, ClassSig, field_type, method_signature, is_printable_class, FuncSig, FuncTable, new_func_table, register_signature, find_signature, find_signature_assignable, resolve_all_declarations, inherited_fields, class_assignable_to, is_subclass_of, class_tag, union_has_none_member, union_member_type_equal
 
-runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}\n\n// str(n)/str(f) -- self-host/checker.lucid's/self-host/codegen.lucid's\n// own dominant `str()` use (`str(expr.span.line)`, `str(err_index)`,\n// `str(lit.value)` for a FloatLit's own float field), the other\n// direction from int(...)/float(...). \"%g\" for a float matches the\n// reference interpreter's own str(3.0) == \"3\" (no trailing \".0\") --\n// the same format print() already uses for a float value.\nstatic const char *lucid_rt_str_of_int(long n) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%ld\", n);\n    return result;\n}\n\nstatic const char *lucid_rt_str_of_float(double f) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%g\", f);\n    return result;\n}\n\n// s.endswith(suffix) -- checker.lucid's/codegen.lucid's own dominant\n// `?`-error-recognition heuristic (`mt.name.endswith(\"Error\")`).\nstatic long lucid_rt_str_endswith(const char *s, const char *suffix) {\n    long ls = (long) strlen(s);\n    long lsuf = (long) strlen(suffix);\n    if (lsuf > ls) {\n        return 0;\n    }\n    return strcmp(s + (ls - lsuf), suffix) == 0;\n}"
+runtime_prelude = "#include <stdio.h>\n#include <string.h>\n#include <stdlib.h>\n\n// Lucid's // and % are Euclidean: the remainder is always in [0, |b|),\n// unlike C's truncating / and % (whose remainder can be negative) and\n// unlike Python's floored // and % (whose remainder takes the sign of\n// the divisor, which can also be negative). Division by zero is\n// undefined behavior here, same as plain C -- this subset doesn't\n// generate the checked-division error path lucid-codegen's own runtime\n// ABI does.\nstatic long lucid_rt_mod(long a, long b) {\n    long r = a % b;\n    if (r < 0) {\n        r += (b < 0) ? -b : b;\n    }\n    return r;\n}\n\nstatic long lucid_rt_floordiv(long a, long b) {\n    long q = a / b;\n    long r = a % b;\n    if (r < 0) {\n        q += (b < 0) ? 1 : -1;\n    }\n    return q;\n}\n\n// str + str is this subset's first heap allocation -- freed nowhere\n// (see self-host/README.md's no-GC/no-arena note: every compiled\n// program runs once and exits).\nstatic const char *lucid_rt_str_concat(const char *a, const char *b) {\n    char *result = malloc(strlen(a) + strlen(b) + 1);\n    strcpy(result, a);\n    strcat(result, b);\n    return result;\n}\n\n// s[i] on a str yields a one-character str, matching Lucid's own\n// indexing (not a numeric byte/char code); a negative index counts\n// from the end (s[-1] is the last character), matching the reference\n// interpreter. lucid_rt_chars is a static table of the 256 possible\n// one-character strings, each already NUL-terminated by C's own\n// zero-initialization of static storage -- a fixed-size lookup, not an\n// allocation, unlike lucid_rt_str_concat above.\nstatic char lucid_rt_chars[256][2];\n\nstatic const char *lucid_rt_str_index(const char *s, long i) {\n    long n = (long) strlen(s);\n    long idx = i;\n    if (idx < 0) {\n        idx += n;\n    }\n    if (idx < 0 || idx >= n) {\n        fprintf(stderr, \"Runtime Error: index %ld out of range\\n\", i);\n        exit(1);\n    }\n    unsigned char c = (unsigned char) s[idx];\n    lucid_rt_chars[c][0] = (char) c;\n    return lucid_rt_chars[c];\n}\n\n// str(n)/str(f) -- self-host/checker.lucid's/self-host/codegen.lucid's\n// own dominant `str()` use (`str(expr.span.line)`, `str(err_index)`,\n// `str(lit.value)` for a FloatLit's own float field), the other\n// direction from int(...)/float(...). \"%g\" for a float matches the\n// reference interpreter's own str(3.0) == \"3\" (no trailing \".0\") --\n// the same format print() already uses for a float value.\nstatic const char *lucid_rt_str_of_int(long n) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%ld\", n);\n    return result;\n}\n\nstatic const char *lucid_rt_str_of_float(double f) {\n    char *result = malloc(32);\n    snprintf(result, 32, \"%g\", f);\n    return result;\n}\n\n// s.endswith(suffix) -- checker.lucid's/codegen.lucid's own dominant\n// `?`-error-recognition heuristic (`mt.name.endswith(\"Error\")`).\nstatic long lucid_rt_str_endswith(const char *s, const char *suffix) {\n    long ls = (long) strlen(s);\n    long lsuf = (long) strlen(suffix);\n    if (lsuf > ls) {\n        return 0;\n    }\n    return strcmp(s + (ls - lsuf), suffix) == 0;\n}\n\n// s.replace(old, new) -- codegen.lucid's own C-string-escaping helper\n// chains several of these calls together; verified directly against\n// the reference interpreter: replaces every occurrence, like Python's\n// str.replace(old, new) with no count limit. Never called with an\n// empty old argument in this subset.\nstatic const char *lucid_rt_str_replace(const char *s, const char *old, const char *repl) {\n    long old_len = (long) strlen(old);\n    long repl_len = (long) strlen(repl);\n    long count = 0;\n    const char *p = s;\n    while (1) {\n        const char *found = strstr(p, old);\n        if (!found) {\n            break;\n        }\n        count++;\n        p = found + old_len;\n    }\n    long result_len = (long) strlen(s) + count * (repl_len - old_len);\n    char *result = malloc((size_t) result_len + 1);\n    char *out = result;\n    p = s;\n    while (1) {\n        const char *found = strstr(p, old);\n        if (!found) {\n            strcpy(out, p);\n            break;\n        }\n        long prefix_len = (long) (found - p);\n        memcpy(out, p, (size_t) prefix_len);\n        out += prefix_len;\n        memcpy(out, repl, (size_t) repl_len);\n        out += repl_len;\n        p = found + old_len;\n    }\n    return result;\n}"
 
 # `sorted(names)` -- types.lucid's/checker.lucid's own dominant use
 # (`sorted_member_names`, `class_tag`), sorting a *fresh copy* of a
@@ -901,6 +901,8 @@ class Codegen:
                             case StrType:
                                 if callee.attr == "endswith":
                                     return BoolType()
+                                if callee.attr == "replace":
+                                    return StrType()
                                 return none
                             case ListType:
                                 if callee.attr == "pop":
@@ -1513,6 +1515,10 @@ class Codegen:
                                 if callee.attr == "endswith" and len(result.args) == 1:
                                     suffix_code = self.codegen_expr(result.args[0].value, known)
                                     return "lucid_rt_str_endswith(" + receiver_code + ", " + suffix_code + ")"
+                                if callee.attr == "replace" and len(result.args) == 2:
+                                    old_code = self.codegen_expr(result.args[0].value, known)
+                                    new_code = self.codegen_expr(result.args[1].value, known)
+                                    return "lucid_rt_str_replace(" + receiver_code + ", " + old_code + ", " + new_code + ")"
                                 return "0 /* unsupported str method */"
                             case ListType:
                                 name = "lucid_list_" + mangle_component(rt.element_type)
@@ -1536,13 +1542,77 @@ class Codegen:
                                                 mi = 0
                                                 while mi < len(result.args):
                                                     a = result.args[mi]
-                                                    arg_code2 = self.codegen_expr(a.value, known)
+                                                    expected_mpt: LType | none = none
                                                     if mi < len(method_sig.param_types):
-                                                        match self.infer_expr_type(a.value, known) as at4:
-                                                            case LType:
-                                                                arg_code2 = cast_or_wrap(self.classes, method_sig.param_types[mi], at4, arg_code2)
-                                                            case none:
-                                                                pass
+                                                        expected_mpt = method_sig.param_types[mi]
+                                                    arg_code2 = "0"
+                                                    arg_type4: LType | none = none
+                                                    # Mirrors this same
+                                                    # function's own Call-
+                                                    # Ident case just above:
+                                                    # `self.codegen_body(
+                                                    # fn.params, fn.body,
+                                                    # known, {},
+                                                    # sig.return_type)`
+                                                    # (codegen.lucid's own
+                                                    # dominant shape) passes
+                                                    # an empty `{}`/`[]`
+                                                    # literal straight to a
+                                                    # method call, which
+                                                    # needs the same
+                                                    # bidirectional
+                                                    # inference from the
+                                                    # method's own declared
+                                                    # parameter type.
+                                                    match a.value as amv:
+                                                        case ListExpr:
+                                                            if len(amv.elements) == 0:
+                                                                match expected_mpt as empt:
+                                                                    case ListType:
+                                                                        arg_code2 = "lucid_list_" + mangle_component(empt.element_type) + "_new()"
+                                                                        arg_type4 = empt
+                                                                    case _:
+                                                                        arg_code2 = self.codegen_expr(amv, known)
+                                                                        arg_type4 = self.infer_expr_type(amv, known)
+                                                            else:
+                                                                arg_code2 = self.codegen_expr(amv, known)
+                                                                arg_type4 = self.infer_expr_type(amv, known)
+                                                        case DictExpr:
+                                                            if len(amv.entries) == 0:
+                                                                match expected_mpt as edpt:
+                                                                    case DictType:
+                                                                        arg_code2 = "lucid_dict_str_" + mangle_component(edpt.value_type) + "_of(0, (const char *[]){0}, (" + c_type_of(edpt.value_type) + "[]){0})"
+                                                                        arg_type4 = edpt
+                                                                    case _:
+                                                                        arg_code2 = self.codegen_expr(amv, known)
+                                                                        arg_type4 = self.infer_expr_type(amv, known)
+                                                            else:
+                                                                arg_code2 = self.codegen_expr(amv, known)
+                                                                arg_type4 = self.infer_expr_type(amv, known)
+                                                        case SetExpr:
+                                                            if len(amv.elements) == 0:
+                                                                match expected_mpt as espt:
+                                                                    case SetType:
+                                                                        arg_code2 = "lucid_set_" + mangle_component(espt.element_type) + "_new()"
+                                                                        arg_type4 = espt
+                                                                    case _:
+                                                                        arg_code2 = self.codegen_expr(amv, known)
+                                                                        arg_type4 = self.infer_expr_type(amv, known)
+                                                            else:
+                                                                arg_code2 = self.codegen_expr(amv, known)
+                                                                arg_type4 = self.infer_expr_type(amv, known)
+                                                        case _:
+                                                            arg_code2 = self.codegen_expr(amv, known)
+                                                            arg_type4 = self.infer_expr_type(amv, known)
+                                                    match expected_mpt as expt_final:
+                                                        case LType:
+                                                            match arg_type4 as at4:
+                                                                case LType:
+                                                                    arg_code2 = cast_or_wrap(self.classes, expt_final, at4, arg_code2)
+                                                                case none:
+                                                                    pass
+                                                        case none:
+                                                            pass
                                                     method_arg_codes.append(arg_code2)
                                                     mi = mi + 1
                                             case none:
@@ -2768,13 +2838,13 @@ class Codegen:
                     # like the general (non-Call, non-literal) case just
                     # below -- this used to leave `loop_text` as the
                     # "unsupported" placeholder for anything but `range`.
-                    match self.infer_expr_type(node.iterable, known) as ctype:
+                    match self.infer_expr_type(node.iterable, known) as iter_ctype:
                         case ListType:
                             csuffix = str(node.span.line) + "_" + str(node.span.column)
                             clist_var = "__lucid_for_list_" + csuffix
                             cidx_name = "__lucid_for_i_" + csuffix
                             citerable_code = self.codegen_expr(node.iterable, known)
-                            clist_ctype = "lucid_list_" + mangle_component(ctype.element_type) + " *"
+                            clist_ctype = "lucid_list_" + mangle_component(iter_ctype.element_type) + " *"
                             cdecl = header_indent + clist_ctype + " " + clist_var + " = " + citerable_code + ";"
                             cloop_open = header_indent + "for (long " + cidx_name + " = 0; " + cidx_name + " < " + clist_var + "->len; " + cidx_name + "++) {"
                             cassign = body_indent + target_name + " = " + clist_var + "->items[" + cidx_name + "];"
@@ -2784,7 +2854,7 @@ class Codegen:
                             cset_var = "__lucid_for_set_" + csuffix2
                             cidx_name2 = "__lucid_for_i_" + csuffix2
                             citerable_code2 = self.codegen_expr(node.iterable, known)
-                            cset_ctype = "lucid_set_" + mangle_component(ctype.element_type) + " *"
+                            cset_ctype = "lucid_set_" + mangle_component(iter_ctype.element_type) + " *"
                             cdecl2 = header_indent + cset_ctype + " " + cset_var + " = " + citerable_code2 + ";"
                             cloop_open2 = header_indent + "for (long " + cidx_name2 + " = 0; " + cidx_name2 + " < " + cset_var + "->len; " + cidx_name2 + "++) {"
                             cassign2 = body_indent + target_name + " = " + cset_var + "->items[" + cidx_name2 + "];"
@@ -2794,7 +2864,7 @@ class Codegen:
                             cdict_var = "__lucid_for_dict_" + csuffix3
                             cidx_name3 = "__lucid_for_i_" + csuffix3
                             citerable_code3 = self.codegen_expr(node.iterable, known)
-                            cdict_ctype = "lucid_dict_str_" + mangle_component(ctype.value_type) + " *"
+                            cdict_ctype = "lucid_dict_str_" + mangle_component(iter_ctype.value_type) + " *"
                             cdecl3 = header_indent + cdict_ctype + " " + cdict_var + " = " + citerable_code3 + ";"
                             cloop_open3 = header_indent + "for (long " + cidx_name3 + " = 0; " + cidx_name3 + " < " + cdict_var + "->len; " + cidx_name3 + "++) {"
                             cassign3 = body_indent + target_name + " = " + cdict_var + "->keys[" + cidx_name3 + "];"

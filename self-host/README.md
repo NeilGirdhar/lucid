@@ -21,10 +21,11 @@ own output exactly: Lucid, compiling Lucid, to a native binary — for the
 subset covered so far, not yet for the whole language. None of the five
 pieces is close to feature parity with its Rust counterpart.
 
-**`self-host/lexer.lucid`, `self-host/parser.lucid`, and `self-host/
-checker.lucid` all now compile through this pipeline**: `checker.lucid`
-reports zero errors on each, and `codegen.lucid`'s generated C for each
-compiles cleanly with `gcc` — the actual bootstrap target, reached for
+**`self-host/lexer.lucid`, `self-host/parser.lucid`, `self-host/
+checker.lucid`, and `self-host/codegen.lucid` all now compile through
+this pipeline**: `checker.lucid` reports zero errors on each, and
+`codegen.lucid`'s generated C for each compiles cleanly with `gcc` —
+the actual bootstrap target, reached for
 `lexer.lucid` after closing the gaps union return types, `match`
 narrowing, and `?` exposed (see the `checker.lucid`/`codegen.lucid`
 entries below, and the `union_types.lucid` compile-demo program, whose
@@ -58,7 +59,15 @@ element/value type from a plain function call's own matching parameter
 `checker.lucid`'s own generated C reached `gcc`, past a clean checker
 pass — five more real, previously-undiscovered bugs (see the
 `checker.lucid`/`codegen.lucid` entries and Design notes below for all
-of these). None of the three is yet linked and run end-to-end as a
+of these); for `codegen.lucid` itself, closing a smaller pair of real
+gaps its own source needed — `str.replace()` and the same
+bidirectional empty-literal call-argument inference `checker.lucid`'s
+round already added for a plain function call, extended to a
+method-call argument too (`self.codegen_body(fn.params, fn.body,
+known, {}, sig.return_type)`) — plus one real, previously-undiscovered
+bug found only once `codegen.lucid`'s own generated C reached `gcc`
+(see the `codegen.lucid` entry and Design notes below for all of
+these). None of the four is yet linked and run end-to-end as a
 working compiled piece (that needs a caller — a compiled `codegen.
 lucid`, or a small hand-written driver — to actually invoke `tokenize`/
 `parse`/`check_program` and check the output against the reference
@@ -67,8 +76,8 @@ compiled program in this pipeline already gets); `self-host/
 _probe_selfcompile.lucid` (untracked, a standing local gauge, not
 committed) re-runs the `lexer.lucid` half of this check on demand.
 
-**Next target: `self-host/codegen.lucid`**, probed the same way, then
-`self-host/interpreter.lucid`.
+**Next target: `self-host/interpreter.lucid`**, probed the same way —
+the last of the five pieces.
 
 - `lexer.lucid` — a lexer, tokenizing Lucid source into the same token
   kinds `compiler/crates/lucid-syntax/src/lexer.rs` produces. Runs under
@@ -1210,14 +1219,79 @@ committed) re-runs the `lexer.lucid` half of this check on demand.
   byte-for-byte against `lucid run`) before being folded into
   `compile_demo_programs/checker_gaps.lucid`, which exercises the whole
   checker.lucid feature set together.
+
+  Compiling `codegen.lucid` itself all the way through this pipeline
+  needed a much smaller round of work than `checker.lucid`'s own —
+  `codegen.lucid` is nearly twice `checker.lucid`'s size (probing it
+  took roughly an hour under the reference interpreter each time,
+  versus checker.lucid's 20-30 minutes), but almost all of that size is
+  code shaped like everything the previous rounds already covered.
+  Two real gaps: `str.replace(old, new)` — `codegen.lucid`'s own
+  C-string-escaping helper chains five of these
+  (`s.replace("\\", "\\\\").replace("\"", "\\\"")...`) — verified
+  directly against the reference interpreter first (a global,
+  Python-`str.replace`-style replacement, no count limit) and added to
+  both `checker.lucid` (`check_call`'s `StrType` case) and
+  `codegen.lucid` (a new `lucid_rt_str_replace` runtime helper, doing
+  its own two-pass count-then-build since C has no built-in
+  string-replace). And the same bidirectional empty-literal
+  call-argument inference `checker.lucid`'s own round added for a
+  plain function call (`check_call`'s `Ident` case peeking at the
+  callee's registered parameter types so an empty `[]`/`{}` argument
+  can infer its type from context) turned out to be missing for a
+  *method*-call argument — `self.codegen_body(fn.params, fn.body,
+  known, {}, sig.return_type)`, `codegen.lucid`'s own dominant shape
+  for building a function or method's C body, passes an empty `{}` (for
+  `exclude: set[str]`) or `[]` (for `params: list[Param]`) straight to
+  a method call, which `check_call`'s `Attribute` case had never been
+  taught to peek at a method signature's own parameter types for,
+  since nothing before this needed it. Fixed in three places doing the
+  same peek-then-check dance the `Ident` case already had: `check_call`
+  (checker.lucid), and both `codegen_expr`'s Call-Attribute case and
+  its own argument-casting loop (codegen.lucid) — mirroring, not
+  reusing, since this pipeline's files share no runtime helpers with
+  each other by design.
+
+  One real, previously-undiscovered bug surfaced only once
+  `codegen.lucid`'s own generated C reached `gcc`, not by either probe
+  above or by any hand-written `compile_demo_programs/*.lucid` file:
+  **`codegen_for`'s own local variable `ctype` collided with an
+  unrelated match alias of the same name in a sibling branch of the
+  same function.** The literal-list branch (`for x in [1, 2, 3]:`)
+  declares a plain `str` local named `ctype` holding a C type name; a
+  few lines later, in the sibling branch handling a non-`range` call's
+  own iterable (`for n in sorted_member_names(...):`), `match self.
+  infer_expr_type(node.iterable, known) as ctype:` reused the exact
+  same name for a match alias bound to an `LType` value. This subset's
+  local-variable type inference is function-scoped, not block-scoped
+  (`infer_local_types` builds one `known` entry per name for the whole
+  enclosing function, the same simplification behind the "one type per
+  name per function" rule `checker.lucid`'s own entry above documents,
+  and the same shape as this session's earlier `at`-collision bug in
+  `checker.lucid`'s `check_call`) — so the single `ctype` declaration in
+  the generated C ended up typed `DictType *` (from the match-alias
+  branch) even in the plain-`str` branch's own code, which then tried
+  to assign a C string literal to it: `gcc` caught it as `assignment to
+  'DictType *' from incompatible pointer type 'char *'`, one of three
+  errors from the same root cause. Root-caused directly from the `gcc`
+  error and codegen.lucid's own source (no minimal reproduction needed
+  this time — the collision was visible by inspection once the error
+  named the exact line). Fixed the same way the `at` bug was: renamed
+  the colliding alias (`ctype` → `iter_ctype`) rather than attempting
+  real block scoping, which nothing else in this subset needs yet.
+
+  Both features and the bug fix were verified the usual way (a
+  from-scratch minimal reproduction, `gcc`-compiled, diffed
+  byte-for-byte against `lucid run`) before being folded into
+  `compile_demo_programs/codegen_gaps.lucid`.
 - `compile_demo.lucid` — **an actual compiler, written in Lucid,
   compiling real Lucid programs to native executables.**
   `examples/vectors.lucid` — classes, `dispatch def` operator
   overloading, multi-argument mixed-type `print` — was never written for
   this pipeline; lexed, parsed, checked, and compiled to C entirely
   through `lexer.lucid`, `parser.lucid`, `checker.lucid`, and
-  `codegen.lucid`. Also compiles eighteen hand-written programs —
-  seventeen real files under `self-host/compile_demo_programs/`, plus
+  `codegen.lucid`. Also compiles nineteen hand-written programs —
+  eighteen real files under `self-host/compile_demo_programs/`, plus
   `imports_demo.lucid`, which lives directly under `self-host/` instead
   (see compile_demo.lucid's own header comment for why: its
   `from .lexer import ...` has to resolve to `self-host/lexer.lucid`
@@ -1319,6 +1393,13 @@ committed) re-runs the `lexer.lucid` half of this check on demand.
   `endswith()`/`sorted()`/`int()`; and `set[str]` with `add()`/`in`/
   `not in` — the checker.lucid feature set and real bugs above,
   exercised together in the one program
+  — and `codegen_gaps` — `str.replace()`, chained on its own result
+  five times, matching `codegen.lucid`'s own C-string-escaping helper;
+  and a method call (`self.combine(...)`/`b.with_tag(...)`) passed an
+  empty `[]`/`{}` argument with no other type context, inferring from
+  the called method's own declared parameter type — the codegen.lucid
+  feature set and real bug above, exercised together in the one
+  program
   — plus one
   Lucid string literal that's supposed to fail checking, proving a
   real error stops codegen

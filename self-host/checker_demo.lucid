@@ -295,3 +295,9 @@ report("comparing a union against a value of a type it doesn't contain is reject
 report("for-loop iteration over a dict's own keys is supported", "def ok() -> int:\n    d: dict[str, int] = {\"a\": 1, \"b\": 2}\n    total = 0\n    for k in d:\n        total = total + 1\n    print(total)\n    return 0\n")
 
 report("for-loop iteration over an arbitrary call's own list return value is supported", "def make_list() -> list[int]:\n    xs: list[int] = [1, 2, 3]\n    return xs\n\ndef ok() -> int:\n    total = 0\n    for n in make_list():\n        total = total + n\n    print(total)\n    return 0\n")
+
+report("str.replace() is supported", "def ok() -> int:\n    print(\"a.b.a\".replace(\".\", \"_\"))\n    return 0\n")
+
+report("str.replace() with a non-str argument is rejected", "def bad() -> str:\n    return \"a.b\".replace(\".\", 1)\n")
+
+report("bidirectional empty-literal inference for a method-call argument is supported", "class Bag:\n    prefix: str\n\n    def combine(self, items: list[str]) -> str:\n        result = self.prefix\n        for item in items:\n            result = result + item\n        return result\n\ndef ok() -> int:\n    b = Bag(\"x:\")\n    print(b.combine([]))\n    return 0\n")

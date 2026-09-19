@@ -1778,16 +1778,74 @@ class Checker:
                         return none
             case Attribute:
                 receiver_type = self.check_expr(callee.value, known)
+                # A class method's own registered parameter types,
+                # peeked at ahead of checking each argument -- the same
+                # bidirectional trick `check_call`'s `Ident` case already
+                # gets for a plain function call, now needed here too
+                # since `self.codegen_body(fn.params, fn.body, known, {},
+                # sig.return_type)` (codegen.lucid's own dominant shape)
+                # passes an empty `{}`/`[]` literal straight to a method
+                # call, not a plain call.
+                method_param_types: list[LType] = []
+                match receiver_type as rt0:
+                    case ClassType:
+                        match self.classes.get(rt0.name, none) as cls0:
+                            case ClassSig:
+                                match method_signature(cls0, callee.attr) as sig0:
+                                    case FuncSig:
+                                        method_param_types = sig0.param_types
+                                    case none:
+                                        pass
+                            case none:
+                                pass
+                    case _:
+                        pass
                 any_arg_unknown = false
                 checked_arg_types: list[LType] = []
+                ai2 = 0
                 for a in call.args:
                     if a.name != none:
                         self.error("call arguments must be positional (no name=value form) in this subset", call.span)
-                    match self.check_expr(a.value, known) as at:
+                    expected_method_param_type: LType | none = none
+                    if ai2 < len(method_param_types):
+                        expected_method_param_type = method_param_types[ai2]
+                    arg_checked_type2: LType | none = none
+                    match a.value as av3:
+                        case ListExpr:
+                            if len(av3.elements) == 0:
+                                match expected_method_param_type as ept4:
+                                    case ListType:
+                                        arg_checked_type2 = ept4
+                                    case _:
+                                        arg_checked_type2 = self.check_expr(av3, known)
+                            else:
+                                arg_checked_type2 = self.check_expr(av3, known)
+                        case DictExpr:
+                            if len(av3.entries) == 0:
+                                match expected_method_param_type as ept5:
+                                    case DictType:
+                                        arg_checked_type2 = ept5
+                                    case _:
+                                        arg_checked_type2 = self.check_expr(av3, known)
+                            else:
+                                arg_checked_type2 = self.check_expr(av3, known)
+                        case SetExpr:
+                            if len(av3.elements) == 0:
+                                match expected_method_param_type as ept6:
+                                    case SetType:
+                                        arg_checked_type2 = ept6
+                                    case _:
+                                        arg_checked_type2 = self.check_expr(av3, known)
+                            else:
+                                arg_checked_type2 = self.check_expr(av3, known)
+                        case _:
+                            arg_checked_type2 = self.check_expr(av3, known)
+                    match arg_checked_type2 as at:
                         case LType:
                             checked_arg_types.append(at)
                         case none:
                             any_arg_unknown = true
+                    ai2 = ai2 + 1
                 match receiver_type as rt:
                     case StrType:
                         # `mt.name.endswith("Error")` -- checker.lucid's/
@@ -1805,6 +1863,20 @@ class Checker:
                             if any_arg_unknown:
                                 return none
                             self.error("str.endswith() requires a single str argument in this subset", call.span)
+                            return none
+                        # `s.replace("\\", "\\\\")...` -- codegen.lucid's
+                        # own C-string-escaping helper, chaining several
+                        # `.replace()` calls -- verified directly:
+                        # replaces every occurrence (like Python's own
+                        # `str.replace(old, new)` with no count limit),
+                        # never called with an empty `old` in this
+                        # subset.
+                        if callee.attr == "replace":
+                            if len(checked_arg_types) == 2 and types_equal(checked_arg_types[0], StrType()) and types_equal(checked_arg_types[1], StrType()):
+                                return StrType()
+                            if any_arg_unknown:
+                                return none
+                            self.error("str.replace() requires two str arguments in this subset", call.span)
                             return none
                         self.error("'" + callee.attr + "' is not supported on str in this subset", call.span)
                         return none

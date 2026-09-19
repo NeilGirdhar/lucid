@@ -1312,6 +1312,9 @@ fn self_hosted_checker_demo_catches_every_kind_of_error() {
         "ERROR: operator EQ is not supported on (str | none, int) in this subset",
         "--- for-loop iteration over a dict's own keys is supported ---\n(no errors)",
         "--- for-loop iteration over an arbitrary call's own list return value is supported ---\n(no errors)",
+        "--- str.replace() is supported ---\n(no errors)",
+        "ERROR: str.replace() requires two str arguments in this subset",
+        "--- bidirectional empty-literal inference for a method-call argument is supported ---\n(no errors)",
     ] {
         assert!(
             stdout.contains(expected),
@@ -1386,7 +1389,7 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
     use std::process::Command;
     let repo_root = format!("{}/../../..", env!("CARGO_MANIFEST_DIR"));
 
-    let cases: [(&str, &str); 19] = [
+    let cases: [(&str, &str); 20] = [
         ("fib", "self-host/compile_demo_programs/fib.lucid"),
         (
             "factorial",
@@ -1422,6 +1425,10 @@ fn self_hosted_compile_demo_produces_correct_native_binaries() {
         (
             "checker_gaps",
             "self-host/compile_demo_programs/checker_gaps.lucid",
+        ),
+        (
+            "codegen_gaps",
+            "self-host/compile_demo_programs/codegen_gaps.lucid",
         ),
         ("vectors", "examples/vectors.lucid"),
     ];
