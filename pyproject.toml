@@ -12,3 +12,6 @@ package = false
 dev = [
     "zensical>=0.0.60",
 ]
+
+[tool.ruff]
+line-length = 100
