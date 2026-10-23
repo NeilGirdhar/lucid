@@ -1,0 +1,14 @@
+from .lexer import is_digit, is_alpha
+
+def count_digits(s: str) -> int:
+    count = 0
+    i = 0
+    while i < len(s):
+        if is_digit(s[i]):
+            count = count + 1
+        i = i + 1
+    return count
+
+print(count_digits("a1b22c333"))
+print(is_alpha("x"))
+print(is_alpha("1"))

@@ -1,0 +1,500 @@
+# A Lucid lexer, written in Lucid.
+#
+# Mirrors compiler/crates/lucid-syntax/src/lexer.rs closely enough that the
+# two can be compared line by line, but is not yet at feature parity with
+# it. Deliberately deferred for a later pass:
+#   - radix-prefixed integers (0x.., 0o.., 0b..) and the complex `j` suffix
+#   - the r"..."/f"..."/b"..." string prefixes
+#   - triple-quoted strings' shared-indent dedenting (content is kept as-is)
+#   - lexer error recovery (the reference lexer can resume after a bad
+#     character; this one stops at the first LexError)
+#
+# Token kinds are spelled as plain strings (Token.kind) rather than as a
+# sealed class hierarchy the way the docs' worked examples model a closed
+# set of cases -- with about 90 cases, mostly single keywords and
+# operators with no payload of their own, a hierarchy would mean 90
+# essentially-empty subclasses. A payload-bearing kind (IDENT, INT, FLOAT,
+# STR) carries its spelling in Token.text; every other kind leaves it "".
+
+class Token:
+    kind: str
+    text: str
+    line: int
+    column: int
+
+class LexError:
+    message: str
+    line: int
+    column: int
+
+def is_digit(c: str) -> bool:
+    return c >= "0" and c <= "9"
+
+def is_alpha(c: str) -> bool:
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "_"
+
+def is_alnum(c: str) -> bool:
+    return is_alpha(c) or is_digit(c)
+
+def is_space(c: str) -> bool:
+    return c == " " or c == "\t" or c == "\r"
+
+keywords: dict[str, str] = {
+    "true": "TRUE",
+    "false": "FALSE",
+    "none": "NONE",
+    "module": "MODULE",
+    "factory": "FACTORY",
+    "construct": "CONSTRUCT",
+    "getter": "GETTER",
+    "setter": "SETTER",
+    "final": "FINAL",
+    "sealed": "SEALED",
+    "override": "OVERRIDE",
+    "without": "WITHOUT",
+    "trait": "TRAIT",
+    "class": "CLASS",
+    "implement": "IMPLEMENT",
+    "dispatch": "DISPATCH",
+    "type": "TYPE",
+    "any": "ANY",
+    "out": "OUT",
+    "trust": "TRUST",
+    "match": "MATCH",
+    "case": "CASE",
+    "if_broken": "IF_BROKEN",
+    "skip": "SKIP",
+    "let": "LET",
+    "caller": "CALLER",
+    "from_var_name": "FROM_VAR_NAME",
+    "classmethod": "CLASSMETHOD",
+    "classvar": "CLASSVAR",
+    "contextmanager": "CONTEXTMANAGER",
+    "and": "AND",
+    "as": "AS",
+    "assert": "ASSERT",
+    "async": "ASYNC",
+    "await": "AWAIT",
+    "break": "BREAK",
+    "continue": "CONTINUE",
+    "def": "DEF",
+    "del": "DEL",
+    "elif": "ELIF",
+    "else": "ELSE",
+    "except": "EXCEPT",
+    "finally": "FINALLY",
+    "for": "FOR",
+    "from": "FROM",
+    "if": "IF",
+    "import": "IMPORT",
+    "in": "IN",
+    "is": "IS",
+    "not": "NOT",
+    "or": "OR",
+    "pass": "PASS",
+    "raise": "RAISE",
+    "return": "RETURN",
+    "try": "TRY",
+    "while": "WHILE",
+    "with": "WITH",
+    "yield": "YIELD",
+    "global": "GLOBAL",
+    "nonlocal": "NONLOCAL",
+    "lambda": "LAMBDA",
+}
+
+class Lexer:
+    source: str
+    pos: int
+    line: int
+    column: int
+    indent_stack: list[int]
+    pending_dedents: int
+    at_line_start: bool
+    open_brackets: int
+
+    def at_end(self) -> bool:
+        return self.pos >= len(self.source)
+
+    def peek(self) -> str:
+        return self.peek_at(0)
+
+    def peek_at(self, offset: int) -> str:
+        target = self.pos + offset
+        if target < 0 or target >= len(self.source):
+            return ""
+        return self.source[target]
+
+    def advance(self) -> str:
+        c = self.peek()
+        if c == "":
+            return c
+        self.pos = self.pos + 1
+        if c == "\n":
+            self.line = self.line + 1
+            self.column = 1
+        else:
+            self.column = self.column + 1
+        return c
+
+    def make(self, kind: str, text: str, start_line: int, start_col: int) -> Token:
+        return Token(kind, text, start_line, start_col)
+
+    def skip_line_comment(self):
+        while self.peek() != "\n" and self.peek() != "":
+            self.advance()
+
+    def count_indent(self) -> int:
+        spaces = 0
+        offset = 0
+        while true:
+            c = self.peek_at(offset)
+            if c == " ":
+                spaces = spaces + 1
+                offset = offset + 1
+            elif c == "\t":
+                spaces = spaces + 4
+                offset = offset + 1
+            else:
+                break
+        return spaces
+
+    def handle_indentation(self) -> Token | none:
+        while self.at_line_start:
+            start_line = self.line
+            start_col = self.column
+            indent_spaces = self.count_indent()
+
+            offset = 0
+            while self.peek_at(offset) == " " or self.peek_at(offset) == "\t":
+                offset = offset + 1
+            next_c = self.peek_at(offset)
+            if next_c == "\n" or next_c == "" or next_c == "#":
+                i = 0
+                while i < offset:
+                    self.advance()
+                    i = i + 1
+                if self.peek() == "#":
+                    self.skip_line_comment()
+                if self.peek() == "\n":
+                    self.advance()
+                if self.at_end():
+                    self.at_line_start = false
+                    return none
+                continue
+
+            self.at_line_start = false
+
+            if self.open_brackets == 0:
+                while self.peek() == " " or self.peek() == "\t":
+                    self.advance()
+
+                current_indent = self.indent_stack[len(self.indent_stack) - 1]
+                if indent_spaces > current_indent:
+                    self.indent_stack.append(indent_spaces)
+                    return self.make("INDENT", "", start_line, start_col)
+                elif indent_spaces < current_indent:
+                    dedent_count = 0
+                    while len(self.indent_stack) > 0 and self.indent_stack[len(self.indent_stack) - 1] > indent_spaces:
+                        self.indent_stack.pop()
+                        dedent_count = dedent_count + 1
+                    if dedent_count > 0:
+                        self.pending_dedents = dedent_count - 1
+                        return self.make("DEDENT", "", start_line, start_col)
+            break
+        return none
+
+    def lex_string(self, quote: str, start_line: int, start_col: int) -> Token | LexError:
+        self.advance()
+        is_triple = false
+        if self.peek() == quote and self.peek_at(1) == quote:
+            self.advance()
+            self.advance()
+            is_triple = true
+
+        content = ""
+        while true:
+            c = self.peek()
+            if c == "":
+                return LexError("unterminated string literal", start_line, start_col)
+            elif c == "\\":
+                self.advance()
+                escaped = self.advance()
+                if escaped == "n":
+                    content = content + "\n"
+                elif escaped == "t":
+                    content = content + "\t"
+                elif escaped == "r":
+                    content = content + "\r"
+                elif escaped == "\\":
+                    content = content + "\\"
+                elif escaped == "\"":
+                    content = content + "\""
+                elif escaped == "'":
+                    content = content + "'"
+                else:
+                    content = content + "\\" + escaped
+            elif c == quote:
+                if is_triple:
+                    if self.peek_at(1) == quote and self.peek_at(2) == quote:
+                        self.advance()
+                        self.advance()
+                        self.advance()
+                        break
+                    else:
+                        content = content + c
+                        self.advance()
+                else:
+                    self.advance()
+                    break
+            else:
+                content = content + c
+                self.advance()
+
+        return self.make("STR", content, start_line, start_col)
+
+    def lex_number(self, start_line: int, start_col: int) -> Token:
+        text = ""
+        is_float = false
+        while true:
+            c = self.peek()
+            if is_digit(c):
+                text = text + c
+                self.advance()
+            elif c == "." and not is_float and is_digit(self.peek_at(1)):
+                is_float = true
+                text = text + c
+                self.advance()
+            elif (c == "e" or c == "E") and len(text) > 0:
+                is_float = true
+                text = text + c
+                self.advance()
+                sign = self.peek()
+                if sign == "+" or sign == "-":
+                    text = text + sign
+                    self.advance()
+            else:
+                break
+        if is_float:
+            return self.make("FLOAT", text, start_line, start_col)
+        return self.make("INT", text, start_line, start_col)
+
+    def lex_ident_or_keyword(self, start_line: int, start_col: int) -> Token:
+        text = ""
+        while is_alnum(self.peek()):
+            text = text + self.peek()
+            self.advance()
+        kind = keywords.get(text, "IDENT")
+        return self.make(kind, text, start_line, start_col)
+
+    def next_token(self) -> Token | LexError:
+        if self.pending_dedents > 0:
+            self.pending_dedents = self.pending_dedents - 1
+            return self.make("DEDENT", "", self.line, self.column)
+
+        layout = self.handle_indentation()
+        match layout as result:
+            case Token:
+                return result
+            case none:
+                pass
+
+        while is_space(self.peek()):
+            self.advance()
+
+        if self.peek() == "#":
+            self.skip_line_comment()
+
+        start_line = self.line
+        start_col = self.column
+        c = self.peek()
+
+        if c == "":
+            if len(self.indent_stack) > 1:
+                self.indent_stack.pop()
+                return self.make("DEDENT", "", start_line, start_col)
+            return self.make("EOF", "", start_line, start_col)
+
+        if c == "\n":
+            self.advance()
+            self.at_line_start = true
+            if self.open_brackets == 0:
+                return self.make("NEWLINE", "", start_line, start_col)
+            return self.next_token()
+
+        if c == "*":
+            self.advance()
+            if self.peek() == "*":
+                self.advance()
+                if self.peek() == "*":
+                    self.advance()
+                    return self.make("TRIPLE_STAR", "", start_line, start_col)
+                if self.peek() == "=":
+                    self.advance()
+                    return self.make("DOUBLE_STAR_EQ", "", start_line, start_col)
+                return self.make("DOUBLE_STAR", "", start_line, start_col)
+            if self.peek() == "=":
+                self.advance()
+                return self.make("STAR_EQ", "", start_line, start_col)
+            return self.make("STAR", "", start_line, start_col)
+
+        if c == "+":
+            self.advance()
+            if self.peek() == "=":
+                self.advance()
+                return self.make("PLUS_EQ", "", start_line, start_col)
+            return self.make("PLUS", "", start_line, start_col)
+
+        if c == "-":
+            self.advance()
+            if self.peek() == ">":
+                self.advance()
+                return self.make("ARROW", "", start_line, start_col)
+            if self.peek() == "=":
+                self.advance()
+                return self.make("MINUS_EQ", "", start_line, start_col)
+            return self.make("MINUS", "", start_line, start_col)
+
+        if c == "/":
+            self.advance()
+            if self.peek() == "/":
+                self.advance()
+                if self.peek() == "=":
+                    self.advance()
+                    return self.make("DOUBLE_SLASH_EQ", "", start_line, start_col)
+                return self.make("DOUBLE_SLASH", "", start_line, start_col)
+            if self.peek() == "=":
+                self.advance()
+                return self.make("SLASH_EQ", "", start_line, start_col)
+            return self.make("SLASH", "", start_line, start_col)
+
+        if c == ".":
+            if self.peek_at(1) == "." and self.peek_at(2) == ".":
+                self.advance()
+                self.advance()
+                self.advance()
+                return self.make("ELLIPSIS", "", start_line, start_col)
+            self.advance()
+            return self.make("DOT", "", start_line, start_col)
+
+        if c == "=":
+            self.advance()
+            if self.peek() == "=":
+                self.advance()
+                if self.peek() == "=":
+                    self.advance()
+                    return self.make("TRIPLE_EQ", "", start_line, start_col)
+                return self.make("EQ_EQ", "", start_line, start_col)
+            return self.make("EQ", "", start_line, start_col)
+
+        if c == "!":
+            self.advance()
+            if self.peek() == "=":
+                self.advance()
+                if self.peek() == "=":
+                    self.advance()
+                    return self.make("TRIPLE_NOT_EQ", "", start_line, start_col)
+                return self.make("NOT_EQ", "", start_line, start_col)
+            return self.make("BANG", "", start_line, start_col)
+
+        if c == "<":
+            self.advance()
+            if self.peek() == "=":
+                self.advance()
+                return self.make("LT_EQ", "", start_line, start_col)
+            if self.peek() == "<":
+                self.advance()
+                return self.make("SHL", "", start_line, start_col)
+            return self.make("LT", "", start_line, start_col)
+
+        if c == ">":
+            self.advance()
+            if self.peek() == "=":
+                self.advance()
+                return self.make("GT_EQ", "", start_line, start_col)
+            if self.peek() == ">":
+                self.advance()
+                return self.make("SHR", "", start_line, start_col)
+            return self.make("GT", "", start_line, start_col)
+
+        if c == ":":
+            self.advance()
+            if self.peek() == "=":
+                self.advance()
+                return self.make("WALRUS", "", start_line, start_col)
+            return self.make("COLON", "", start_line, start_col)
+
+        if c == "%":
+            self.advance()
+            if self.peek() == "=":
+                self.advance()
+                return self.make("PERCENT_EQ", "", start_line, start_col)
+            return self.make("PERCENT", "", start_line, start_col)
+
+        if c == "(":
+            self.advance()
+            self.open_brackets = self.open_brackets + 1
+            return self.make("LPAREN", "", start_line, start_col)
+        if c == ")":
+            self.advance()
+            if self.open_brackets > 0:
+                self.open_brackets = self.open_brackets - 1
+            return self.make("RPAREN", "", start_line, start_col)
+        if c == "[":
+            self.advance()
+            self.open_brackets = self.open_brackets + 1
+            return self.make("LBRACKET", "", start_line, start_col)
+        if c == "]":
+            self.advance()
+            if self.open_brackets > 0:
+                self.open_brackets = self.open_brackets - 1
+            return self.make("RBRACKET", "", start_line, start_col)
+        if c == "{":
+            self.advance()
+            self.open_brackets = self.open_brackets + 1
+            return self.make("LBRACE", "", start_line, start_col)
+        if c == "}":
+            self.advance()
+            if self.open_brackets > 0:
+                self.open_brackets = self.open_brackets - 1
+            return self.make("RBRACE", "", start_line, start_col)
+
+        single: dict[str, str] = {
+            ",": "COMMA",
+            ";": "SEMI",
+            "@": "AT",
+            "|": "PIPE",
+            "^": "CARET",
+            "~": "TILDE",
+            "&": "AMP",
+            "?": "QUESTION",
+        }
+        single_kind = single.get(c, "")
+        if single_kind != "":
+            self.advance()
+            return self.make(single_kind, "", start_line, start_col)
+
+        if c == "\"" or c == "'":
+            return self.lex_string(c, start_line, start_col)
+
+        if is_digit(c):
+            return self.lex_number(start_line, start_col)
+
+        if is_alpha(c):
+            return self.lex_ident_or_keyword(start_line, start_col)
+
+        return LexError("unexpected character '" + c + "'", start_line, start_col)
+
+def new_lexer(source: str) -> Lexer:
+    stack: list[int] = [0]
+    return Lexer(source, 0, 1, 1, stack, 0, true, 0)
+
+def tokenize(source: str) -> list[Token] | LexError:
+    lexer = new_lexer(source)
+    tokens: list[Token] = []
+    while true:
+        tok = lexer.next_token()?
+        tokens.append(tok)
+        if tok.kind == "EOF":
+            break
+    return tokens

@@ -1,0 +1,54 @@
+class Counter:
+    value: int
+
+    def get(self) -> int:
+        return self.value
+
+    def increment(self):
+        self.value = self.value + 1
+
+c = Counter(0)
+c.increment()
+c.increment()
+c.increment()
+print(c.get())
+
+class Point:
+    x: int
+    y: int
+
+    def sum(self) -> int:
+        return self.x + self.y
+
+    def double_sum(self) -> int:
+        return self.sum() * 2
+
+p = Point(3, 4)
+print(p.double_sum())
+
+class Adder:
+    base: int
+
+    def add(self, n: int) -> int:
+        return self.base + n
+
+a = Adder(10)
+print(a.add(5))
+
+class Greeter:
+    name: str
+
+    def greet(self) -> str:
+        return "Hello, " + self.name
+
+g = Greeter("World")
+print(g.greet())
+
+class Flag:
+    on: bool
+
+    def is_on(self) -> bool:
+        return self.on
+
+f = Flag(true)
+print(f.is_on())

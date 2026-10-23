@@ -1,0 +1,39 @@
+# read_file/write_file/ParseError -- self-host/checker.lucid's and
+# self-host/codegen.lucid's own read_file/write_file support (see
+# their own header comments in checker.lucid's check_call and
+# codegen.lucid's codegen_expr/infer_expr_type). No other
+# compile_demo_programs/*.lucid file calls either builtin, so this is
+# the first thing that actually exercises them through the self-hosted
+# pipeline itself (checker.lucid/codegen.lucid processing THIS file as
+# their own entry file, not compile_demo.lucid's interpreted driver
+# calling them directly, which is a different, already-working path).
+# Reads a file known to exist, reads one that doesn't (the ParseError
+# path), and writes a fresh file whose contents round-trip back
+# through a second read -- also exercising a 3-member `str | none |
+# ParseError` match indirectly via two separate 2-member matches
+# (`str | ParseError`, `none | ParseError`), the two distinct unions
+# read_file/write_file actually return.
+
+match read_file("self-host/compile_demo_programs/gcd.lucid") as ok_result:
+    case str:
+        print("read ok, non-empty:", len(ok_result) > 0)
+    case ParseError:
+        print("unexpected read error:", ok_result.message)
+
+match read_file("self-host/compile_demo_programs/does_not_exist.lucid") as err_result:
+    case str:
+        print("unexpected success:", len(err_result))
+    case ParseError:
+        print("read error as expected")
+
+match write_file("/tmp/lucid_file_io_probe.txt", "hello from lucid") as write_outcome:
+    case none:
+        print("write ok")
+    case ParseError:
+        print("unexpected write error:", write_outcome.message)
+
+match read_file("/tmp/lucid_file_io_probe.txt") as roundtrip:
+    case str:
+        print("roundtrip:", roundtrip)
+    case ParseError:
+        print("unexpected roundtrip error:", roundtrip.message)

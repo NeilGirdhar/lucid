@@ -1,0 +1,17 @@
+def gcd(a: int, b: int) -> int:
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+
+def classify(n: int) -> int:
+    if n > 0 and n % 2 == 0:
+        return 1
+    if n > 0 or n == 0:
+        return 2
+    return 3
+
+print(gcd(48, 18))
+print(gcd(17, 5))
+print(classify(4))
+print(classify(3))
+print(classify(-1))

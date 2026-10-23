@@ -1,0 +1,25 @@
+class Counter:
+    value: int
+
+c = Counter(0)
+c.value = c.value + 1
+c.value = c.value + 1
+c.value = c.value + 1
+print(c.value)
+
+def increment(counter: Counter):
+    counter.value = counter.value + 1
+
+increment(c)
+increment(c)
+print(c.value)
+
+class Pair:
+    a: int
+    b: int
+
+p = Pair(1, 2)
+p.a = 10
+p.b = 20
+print(p.a)
+print(p.b)

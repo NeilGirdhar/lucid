@@ -43,6 +43,9 @@ document first, in its own commit, then the compiler.
 - `examples/*.lucid`, `benchmarks/*.lucid`—Lucid programs. They are
   Lucid source, so they follow the specification exactly like a code
   block in `docs/` does.
+- `self-host/`—pieces of the compiler being rewritten in Lucid itself
+  (self-hosting), starting with the lexer. Lucid source, so the same
+  rule applies; see `self-host/README.md` for status.
 - `editors/`—editor support (a VS Code grammar).
 - `.github/workflows/`—CI: the strict site build, deployed to GitHub
   Pages on every push to `main`, and the Rust checks listed under

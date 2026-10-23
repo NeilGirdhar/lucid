@@ -1,0 +1,96 @@
+# Exercises self-host/parser.lucid against a small real Lucid snippet,
+# then against the lexer's own source -- if the parser can turn real
+# Lucid source into a well-formed AST without a ParserError or
+# LexError, that's the self-hosting proof point for this piece: Lucid
+# source a human wrote, run by the reference interpreter, correctly
+# parsing Lucid source.
+
+from .parser import parse, ParserError
+from .lexer import LexError
+from .ast import ParsedModule, Stmt, ClassDef, TraitDef, ImplementDef, TypeAliasStmt, FunctionStmt, VarDef, With, Assignment, AugAssign, If, For, While, MatchStmt, Try, Return, Raise, Yield, Assert, Delete, Break, Continue, Pass, ModuleStmt, Import, FromImport, ExprStmt, MetadataStmt
+
+def describe_stmt(s: Stmt) -> str:
+    match s as result:
+        case ClassDef:
+            return "class " + result.name
+        case TraitDef:
+            return "trait " + result.name
+        case ImplementDef:
+            return "implement"
+        case TypeAliasStmt:
+            return "type " + result.name
+        case FunctionStmt:
+            return "def " + result.function.name
+        case VarDef:
+            return "vardef"
+        case With:
+            return "with"
+        case Assignment:
+            return "assignment"
+        case AugAssign:
+            return "augassign"
+        case If:
+            return "if"
+        case For:
+            return "for"
+        case While:
+            return "while"
+        case MatchStmt:
+            return "match"
+        case Try:
+            return "try"
+        case Return:
+            return "return"
+        case Raise:
+            return "raise"
+        case Yield:
+            return "yield"
+        case Assert:
+            return "assert"
+        case Delete:
+            return "delete"
+        case Break:
+            return "break"
+        case Continue:
+            return "continue"
+        case Pass:
+            return "pass"
+        case ModuleStmt:
+            return "module " + result.name
+        case Import:
+            return "import " + result.module_name
+        case FromImport:
+            return "from " + result.module_name + " import"
+        case ExprStmt:
+            return "exprstmt"
+        case MetadataStmt:
+            return "metadata"
+
+sample = "def greet(name: str) -> str:\n    return \"Hello, \" + name\n\nclass Point:\n    x: int\n    y: int\n\np = Point(1, 2)\nprint(p.x + p.y)\n"
+
+print("--- parsing a sample program ---")
+match parse(sample) as result:
+    case ParsedModule:
+        for stmt in result.statements:
+            print(describe_stmt(stmt))
+    case ParserError:
+        print("PARSE ERROR:", result.message)
+    case LexError:
+        print("LEX ERROR:", result.message, "at", result.line, result.column)
+
+def self_parse_count(path: str) -> int | ParseError | ParserError | LexError:
+    own_source = read_file(path)?
+    parsed = parse(own_source)?
+    return len(parsed.statements)
+
+print("")
+print("--- parsing the lexer's own source ---")
+match self_parse_count("self-host/lexer.lucid") as result:
+    case int:
+        print("self-parse succeeded:", result, "top-level statements")
+    case ParseError:
+        print("could not read own source:", result.message)
+    case ParserError:
+        print("PARSE ERROR in self-parse:", result.message)
+    case LexError:
+        print("LEX ERROR in self-parse:", result.message, "at", result.line, result.column)

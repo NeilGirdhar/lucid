@@ -1,0 +1,114 @@
+sealed class LType:
+    pass
+
+class IntType(LType):
+    pass
+
+class StrType(LType):
+    pass
+
+class ListType(LType):
+    element_type: LType
+
+class Registry:
+    types: dict[str, LType]
+
+def type_name(t: LType) -> str:
+    match t as result:
+        case IntType:
+            return "int"
+        case StrType:
+            return "str"
+        case ListType:
+            return "list[" + type_name(result.element_type) + "]"
+        case _:
+            return "?"
+
+def make_registry() -> Registry:
+    reg = Registry({:})
+    reg.types["a"] = IntType()
+    reg.types["b"] = StrType()
+    reg.types["a"] = ListType(IntType())
+    return reg
+
+def lookup_name(reg: Registry, key: str) -> str:
+    match reg.types.get(key, none) as found:
+        case LType:
+            return type_name(found)
+        case none:
+            return "missing"
+
+def has_key(reg: Registry, key: str) -> bool:
+    if reg.types.get(key, none) != none:
+        return true
+    return false
+
+def resolve_or_default(name: str | none, default: str) -> str:
+    if name == default:
+        return "default"
+    return "custom"
+
+def classify(t: LType) -> str:
+    match t as result:
+        case IntType:
+            return "concrete:" + type_name(result)
+        case _:
+            return "generic:" + type_name(result)
+
+def collect_type_names(types: dict[str, LType]) -> list[str]:
+    names: list[str] = []
+    for key in types:
+        names.append(key)
+    return sorted(names)
+
+def collect_seen(names: list[str]) -> set[str]:
+    seen: set[str] = {}
+    for n in names:
+        seen.add(n)
+    return seen
+
+def count_new(existing: set[str], candidates: list[str]) -> int:
+    total = 0
+    for c in candidates:
+        if c not in existing:
+            total = total + 1
+    return total
+
+def make_numbers() -> list[int]:
+    numbers: list[int] = []
+    numbers.append(int("3"))
+    numbers.append(int("1"))
+    return numbers
+
+def parse_score(text: str) -> str:
+    if text.endswith("pts"):
+        digits = text[0]
+        return str(int(digits) - 3) + "pts-normalized"
+    return text
+
+def ok() -> int:
+    reg = make_registry()
+    print(lookup_name(reg, "a"))
+    print(lookup_name(reg, "b"))
+    print(lookup_name(reg, "c"))
+    print(has_key(reg, "a"))
+    print(has_key(reg, "z"))
+    print(type_name(reg.types["b"]))
+    print(resolve_or_default("x", "x"))
+    print(resolve_or_default("x", "y"))
+    print(classify(IntType()))
+    print(classify(StrType()))
+    names = collect_type_names(reg.types)
+    print(len(names))
+    print(names[0])
+    print(names[1])
+    seen = collect_seen(names)
+    print(count_new(seen, ["a", "b", "c"]))
+    ns = make_numbers()
+    print(ns[0])
+    print(ns[1])
+    print(parse_score("7pts"))
+    print(parse_score("nope"))
+    return 0
+
+print(ok())

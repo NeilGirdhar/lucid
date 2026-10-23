@@ -1,0 +1,12 @@
+def factorial(n: int) -> int:
+    result = 1
+    k = 1
+    while k <= n:
+        result = result * k
+        k = k + 1
+    return result
+
+n = 1
+while n <= 7:
+    print(factorial(n))
+    n = n + 1

@@ -1,0 +1,98 @@
+sealed class Node:
+    id: int
+
+class NumberNode(Node):
+    value: int
+
+class Measurement:
+    label: str
+    amount: float
+
+class Result:
+    value: int
+
+class ItemError:
+    message: str
+
+class Label:
+    text: str
+
+def get_item(ok: bool) -> int | ItemError:
+    if ok:
+        return 1
+    return ItemError("bad")
+
+def collect(items: list[int], ok: bool) -> Result | ItemError:
+    items.append(get_item(ok)?)
+    return Result(items[len(items) - 1])
+
+def build_sum(ok: bool) -> Result | ItemError:
+    total = get_item(ok)? + 1
+    return Result(total)
+
+def parse_amount(text: str) -> int:
+    return int(text)
+
+def parse_scale(text: str) -> float:
+    return float(text)
+
+def make_measurement(label: str, text: str) -> Measurement:
+    return Measurement(label, parse_scale(text))
+
+def with_default(use_default: bool, value: int) -> int:
+    default: int = 0
+    if use_default:
+        default = value
+    return default
+
+def make_node(use_number: bool, id: int, value: int) -> Node:
+    node: Node = NumberNode(id, value)
+    if not use_number:
+        node = NumberNode(id, 0)
+    return node
+
+def pick_label(ok: bool) -> Label:
+    label: Label | none = none
+    if ok:
+        label = Label("ready")
+    match label as l:
+        case Label:
+            return l
+        case none:
+            return Label("unset")
+
+def ok() -> int:
+    items: list[int] = []
+    match collect(items, true) as r0:
+        case Result:
+            print(r0.value)
+        case ItemError:
+            print(r0.message)
+    print(len(items))
+    match collect(items, false) as r1:
+        case Result:
+            print(r1.value)
+        case ItemError:
+            print(r1.message)
+    match build_sum(true) as r2:
+        case Result:
+            print(r2.value)
+        case ItemError:
+            print(r2.message)
+    match build_sum(false) as r3:
+        case Result:
+            print(r3.value)
+        case ItemError:
+            print(r3.message)
+    print(parse_amount("42"))
+    m = make_measurement("weight", "2.5")
+    print(m)
+    print(with_default(false, 9))
+    print(with_default(true, 9))
+    n = make_node(true, 1, 10)
+    print(n.id)
+    print(pick_label(true).text)
+    print(pick_label(false).text)
+    return 0
+
+print(ok())

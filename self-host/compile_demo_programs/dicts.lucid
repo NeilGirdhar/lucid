@@ -1,0 +1,36 @@
+keywords: dict[str, str] = {
+    "true": "TRUE",
+    "false": "FALSE",
+    "none": "NONE",
+}
+
+print(keywords.get("true", "IDENT"))
+print(keywords.get("false", "IDENT"))
+print(keywords.get("xyz", "IDENT"))
+
+def classify(c: str) -> str:
+    single: dict[str, str] = {
+        ",": "COMMA",
+        ";": "SEMI",
+        "@": "AT",
+    }
+    return single.get(c, "")
+
+print(classify(","))
+print(classify("@"))
+print(classify("z"))
+
+def make_empty() -> int:
+    d: dict[str, int] = {:}
+    return d.get("missing", -1)
+
+print(make_empty())
+
+counts: dict[str, int] = {
+    "a": 1,
+    "b": 2,
+    "c": 3,
+}
+print(counts.get("a", 0))
+print(counts.get("b", 0))
+print(counts.get("z", 0))

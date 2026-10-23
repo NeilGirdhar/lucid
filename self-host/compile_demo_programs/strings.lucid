@@ -1,0 +1,48 @@
+print("" == "")
+print("a" == "a")
+print("a" == "b")
+print("a" != "b")
+print(len(""))
+print(len("abc"))
+print("a" < "b")
+print("b" < "a")
+print("a" <= "a")
+print("b" > "a")
+print("a" >= "b")
+
+def is_empty(s: str) -> bool:
+    return len(s) == 0
+
+def same(a: str, b: str) -> bool:
+    return a == b
+
+def greet(name: str) -> str:
+    return "Hello, " + name + "!"
+
+print(is_empty(""))
+print(is_empty("x"))
+print(same("hello", "hello"))
+print(same("hello", "world"))
+
+print("a" + "b")
+print("" + "x")
+concatenated = "hello, " + "world"
+print(concatenated)
+print(greet("Alice"))
+print(len(greet("Bob")))
+
+def count_char(s: str, target: str) -> int:
+    count = 0
+    for i in range(len(s)):
+        if s[i] == target:
+            count = count + 1
+    return count
+
+s = "hello"
+print(s[0])
+print(s[1])
+print(s[-1])
+print("xyz"[2])
+print(s[1] + s[0])
+print(count_char("hello", "l"))
+print(count_char("hello", "z"))
