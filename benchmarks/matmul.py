@@ -1,6 +1,7 @@
 # Matrix Multiplication Benchmark (O(N^3) dense matrix product)
 import time
 
+
 def matmul(n: int) -> float:
     a = [[0.0 for _ in range(n)] for _ in range(n)]
     b = [[0.0 for _ in range(n)] for _ in range(n)]
@@ -22,6 +23,7 @@ def matmul(n: int) -> float:
         for j in range(n):
             total += c[i][j]
     return total
+
 
 n = 100
 t0 = time.time()

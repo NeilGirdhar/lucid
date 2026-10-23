@@ -1,6 +1,7 @@
 # Fannkuch-Redux Benchmark (Permutation generation and prefix reversals)
 import time
 
+
 def fannkuch(n: int) -> list:
     p = list(range(n))
     q = list(range(n))
@@ -20,8 +21,7 @@ def fannkuch(n: int) -> list:
                 qq = q[q0]
                 if qq == 0:
                     sum_flips += sign * flips
-                    if flips > maxflips:
-                        maxflips = flips
+                    maxflips = max(maxflips, flips)
                     break
                 q[q0] = q0
                 if q0 >= 3:
@@ -60,6 +60,7 @@ def fannkuch(n: int) -> list:
                 for j in range(i + 1):
                     p[j] = p[j + 1]
                 p[i + 1] = t
+
 
 n = 7
 t0 = time.time()

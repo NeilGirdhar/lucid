@@ -1,11 +1,13 @@
 # Binary Trees Benchmark (Recursive object tree allocation and traversal)
 import time
 
+
 class Node:
     def __init__(self, item, left=None, right=None):
         self.item = item
         self.left = left
         self.right = right
+
 
 def make_tree(item, depth):
     if depth == 0:
@@ -14,10 +16,12 @@ def make_tree(item, depth):
     depth1 = depth - 1
     return Node(item, make_tree(item2 - 1, depth1), make_tree(item2, depth1))
 
+
 def check_tree(node):
     if node.left is None:
         return node.item
     return node.item + check_tree(node.left) - check_tree(node.right)
+
 
 min_depth = 4
 max_depth = 10

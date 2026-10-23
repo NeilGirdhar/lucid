@@ -1,7 +1,9 @@
 # Quicksort Benchmark (Recursive in-place partitioning of pseudo-random data)
-import time
 import sys
+import time
+
 sys.setrecursionlimit(20000)
+
 
 def partition(arr: list, low: int, high: int) -> int:
     pivot = arr[high]
@@ -17,11 +19,13 @@ def partition(arr: list, low: int, high: int) -> int:
     arr[high] = temp
     return i + 1
 
+
 def quicksort(arr: list, low: int, high: int) -> None:
     if low < high:
         pi = partition(arr, low, high)
         quicksort(arr, low, pi - 1)
         quicksort(arr, pi + 1, high)
+
 
 n = 10000
 seed = 42

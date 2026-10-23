@@ -1,6 +1,7 @@
 # Mandelbrot Set Benchmark (Complex plane escape-time computation)
 import time
 
+
 def mandelbrot(n: int, max_iter: int) -> int:
     count = 0
     inv_n = 2.0 / n
@@ -24,6 +25,7 @@ def mandelbrot(n: int, max_iter: int) -> int:
             if not escaped:
                 count += 1
     return count
+
 
 n = 200
 t0 = time.time()

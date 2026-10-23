@@ -1,6 +1,7 @@
 # FASTA Benchmark (Pseudo-random nucleotide sequence generation via weighted selection)
 import time
 
+
 class RandomGen:
     def __init__(self, last):
         self.last = last
@@ -9,13 +10,25 @@ class RandomGen:
         self.last = (self.last * 3877 + 29573) % 139968
         return max_val * (self.last / 139968.0)
 
+
 alu = "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGGCGGATCACCTGAGGTCAGGAGTTCGAGACCAGCCTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAATACAAAAATTAGCCGGGCGTGGTGGCGCGCGCCTGTAATCCCAGCTACTCGGGAGGCTGAGGCAGGAGAATCGCTTGAACCCGGGAGGCGGAGGTTGCAGTGAGCCGAGATCGCGCCACTGCACTCCAGCCTGGGCGACAGAGCGAGACTCCGTCTCA"
 
 iub = [
-    ["a", 0.27], ["c", 0.12], ["g", 0.12], ["t", 0.27],
-    ["B", 0.02], ["D", 0.02], ["H", 0.02], ["K", 0.02],
-    ["M", 0.02], ["N", 0.02], ["R", 0.02], ["S", 0.02],
-    ["V", 0.02], ["W", 0.02], ["Y", 0.02]
+    ["a", 0.27],
+    ["c", 0.12],
+    ["g", 0.12],
+    ["t", 0.27],
+    ["B", 0.02],
+    ["D", 0.02],
+    ["H", 0.02],
+    ["K", 0.02],
+    ["M", 0.02],
+    ["N", 0.02],
+    ["R", 0.02],
+    ["S", 0.02],
+    ["V", 0.02],
+    ["W", 0.02],
+    ["Y", 0.02],
 ]
 
 # make cumulative
@@ -24,12 +37,14 @@ for entry in iub:
     cp += entry[1]
     entry[1] = cp
 
+
 def select_random(table: list, rng: RandomGen) -> str:
     r = rng.next(1.0)
     for entry in table:
         if entry[1] >= r:
             return entry[0]
     return table[len(table) - 1][0]
+
 
 def run_fasta(n: int) -> list:
     rng = RandomGen(last=42)
@@ -53,6 +68,7 @@ def run_fasta(n: int) -> list:
             count_t += 1
 
     return [count_G, count_C, count_a, count_t]
+
 
 n = 10000
 t0 = time.time()

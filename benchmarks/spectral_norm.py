@@ -1,8 +1,10 @@
 # Spectral Norm Benchmark (Power method eigenvalue calculation)
 import time
 
+
 def a(i: int, j: int) -> float:
     return 1.0 / (((i + j) * (i + j + 1)) // 2 + i + 1)
+
 
 def multiply_av(n: int, v: list) -> list:
     res = [0.0] * n
@@ -13,6 +15,7 @@ def multiply_av(n: int, v: list) -> list:
         res[i] = s
     return res
 
+
 def multiply_atv(n: int, v: list) -> list:
     res = [0.0] * n
     for i in range(n):
@@ -22,9 +25,11 @@ def multiply_atv(n: int, v: list) -> list:
         res[i] = s
     return res
 
+
 def multiply_at_av(n: int, v: list) -> list:
     u = multiply_av(n, v)
     return multiply_atv(n, u)
+
 
 n = 100
 t0 = time.time()
